@@ -1,0 +1,131 @@
+(ns eacl-solidjs.system
+  "REPL-friendly ownership of Datomic, EACL, executor, and Ring lifecycle."
+  (:require [clojure.tools.logging :as log]
+            [datomic.api :as d]
+            [eacl.datomic.core :as datomic-eacl]
+            [eacl.datomic.schema :as schema]
+            [eacl-solidjs.api :as api]
+            [eacl-solidjs.config :as config]
+            [eacl-solidjs.data :as data]
+            [ring.adapter.jetty :as jetty])
+  (:import [java.util.concurrent Executors ExecutorService TimeUnit]))
+
+(defonce !system (atom nil))
+
+(defn- ensure-storage-schema!
+  [conn]
+  (when-not (d/entid (d/db conn) :eacl/id)
+    @(d/transact conn schema/v7-schema)))
+
+(defn- client-options
+  [{:keys [security-key]}]
+  (cond-> {:coherence-authority :managed
+           :cache {:remember-answers true}}
+    security-key (assoc :security-key security-key)))
+
+(defn build-system
+  [runtime-config]
+  (let [runtime-config (config/validate runtime-config)
+        uri (:datomic-uri runtime-config)
+        _ (d/create-database uri)
+        conn (d/connect uri)
+        executor (Executors/newFixedThreadPool 2)]
+    (try
+      (ensure-storage-schema! conn)
+      (let [acl (datomic-eacl/make-client conn (client-options runtime-config))
+            !seed-progress (atom data/ready-progress)
+            system {:config runtime-config
+                    :conn conn
+                    :acl acl
+                    :executor executor
+                    :!cache-generation (atom 0)
+                    :!metrics (atom {})
+                    :!seed-running? (atom false)
+                    :!seed-progress !seed-progress
+                    :evict-lock (Object.)}
+            ready-progress (data/install-demo! conn acl)
+            system (assoc system :handler (api/app system))]
+        (reset! !seed-progress ready-progress)
+        system)
+      (catch Throwable throwable
+        (.shutdownNow ^ExecutorService executor)
+        (.release conn)
+        (throw throwable)))))
+
+(defn- close-system!
+  [{:keys [http-server conn executor]}]
+  (when http-server
+    (.stop http-server))
+  (when executor
+    (.shutdownNow ^ExecutorService executor)
+    (.awaitTermination ^ExecutorService executor 2 TimeUnit/SECONDS))
+  (when conn
+    (try
+      (.release conn)
+      (catch IllegalStateException exception
+        (log/debug exception "Datomic connection was already released")))))
+
+(defn- listen!
+  [base]
+  (let [{:keys [host port request-timeout-ms]} (:config base)]
+    (try
+      (let [server
+            (jetty/run-jetty
+             (:handler base)
+             {:host host
+              :port port
+              :join? false
+              :idle-timeout request-timeout-ms})
+            running (assoc base :http-server server)]
+        (reset! !system running)
+        (log/info "EACL SolidJS server ready" {:host host :port port})
+        running)
+      (catch Throwable throwable
+        (close-system! base)
+        (throw throwable)))))
+
+(defn start!
+  ([] (start! (config/from-env)))
+  ([runtime-config]
+   (when @!system
+     (throw (ex-info "EACL SolidJS server is already running."
+                     {:type :eacl-solidjs.system/already-running})))
+   (listen! (build-system runtime-config))))
+
+(defn stop!
+  []
+  (when-let [system @!system]
+    (reset! !system nil)
+    (close-system! system)
+    (log/info "EACL SolidJS server stopped"))
+  nil)
+
+(defn restart!
+  ([] (restart! (config/from-env)))
+  ([runtime-config]
+   (let [runtime-config (config/validate runtime-config)
+         previous @!system
+         same-client-config?
+         (= (select-keys (:config previous) [:datomic-uri :security-key])
+            (select-keys runtime-config [:datomic-uri :security-key]))]
+     (if (and previous same-client-config?)
+       ;; Reuse the live Datomic/EACL/executor state on a code or listener
+       ;; reload. Datomic memory connections are single shared handles, so
+       ;; releasing an "old" handle also invalidates a newly connected one.
+       (let [base (-> previous
+                      (dissoc :http-server :handler)
+                      (assoc :config runtime-config))
+             replacement (assoc base :handler (api/app base))]
+         (when-let [http-server (:http-server previous)]
+           (.stop http-server))
+         (reset! !system nil)
+         (log/info "EACL SolidJS HTTP listener stopped")
+         (listen! replacement))
+       ;; A different database or token domain requires a fully new client.
+       ;; Build it before releasing the prior independent connection.
+       (let [replacement (build-system runtime-config)]
+         (when previous
+           (reset! !system nil)
+           (close-system! previous)
+           (log/info "EACL SolidJS server stopped"))
+         (listen! replacement))))))

@@ -1,0 +1,155 @@
+(ns eacl-solidjs.integration-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [eacl-solidjs.data :as data]
+            [eacl-solidjs.test-support :as support]))
+
+(deftest real-eacl-query-endpoints
+  (support/with-test-system [system]
+    (let [handler (:handler system)
+          first-page (support/request handler :post "/api/eacl/lookup-resources"
+                                      support/lookup-resources-body)
+          first-data (support/data first-page)
+          cursor (get-in first-data [:pageInfo :endCursor])
+          second-page
+          (support/request handler :post "/api/eacl/lookup-resources"
+                           (assoc support/lookup-resources-body :after cursor))
+          count-response
+          (support/request handler :post "/api/eacl/count-resources"
+                           (dissoc support/lookup-resources-body :pageSize))
+          subjects
+          (support/request handler :post "/api/eacl/lookup-subjects"
+                           {:resource support/server-0
+                            :permission "view"
+                            :subjectType "user"
+                            :pageSize 10
+                            :cache true})
+          relationships
+          (support/request handler :post "/api/eacl/read-relationships"
+                           {:subject support/account-0
+                            :resourceType "server"
+                            :relation "account"
+                            :authorizationSubject support/super-user
+                            :permission "view"
+                            :pageSize 10
+                            :cache true})
+          check
+          (support/request handler :post "/api/eacl/check-permission"
+                           {:subject support/user-1
+                            :resource support/account-0
+                            :permission "admin"
+                            :cache true})
+          platforms
+          (support/request handler :post "/api/eacl/lookup-resources"
+                           (assoc support/lookup-resources-body
+                                  :resourceType "platform"))]
+      (is (= 200 (:status first-page)))
+      (is (= 10 (count (:items first-data))))
+      (is (not (re-find #"displayName" (:body first-page))))
+      (is (true? (get-in first-data [:pageInfo :hasNextPage])))
+      (is (= 200 (:status second-page)))
+      (is (not= (mapv :id (:items first-data))
+                (mapv :id (:items (support/data second-page)))))
+      (is (= 48 (get-in (support/data count-response) [:count])))
+      (is (= 200 (:status subjects)))
+      (is (seq (:items (support/data subjects))))
+      (is (not (re-find #"displayName" (:body subjects))))
+      (is (= 200 (:status relationships)))
+      (is (= 10 (count (:items (support/data relationships)))))
+      (is (not (re-find #"displayName" (:body relationships))))
+      (is (= true (get-in (support/data check) [:allowed])))
+      (is (= 200 (:status platforms)))
+      (is (= [{:type "platform" :id "platform"}]
+             (:items (support/data platforms)))))))
+
+(deftest asynchronous-seed-keeps-eacl-queries-available
+  (support/with-test-system [system]
+    (let [handler (:handler system)
+          before (get-in (support/data
+                          (support/request handler :get "/api/bootstrap"))
+                         [:totals :servers])
+          accepted (support/request handler :post "/api/seed" {:serverCount 2001})
+          query-while-seeding
+          (support/request handler :post "/api/eacl/lookup-resources"
+                           support/lookup-resources-body)
+          completed
+          (loop [attempt 0]
+            (let [response (support/request handler :get "/api/seed")
+                  status (:status (support/data response))]
+              (if (or (= :ready status) (= "ready" status) (>= attempt 400))
+                response
+                (do
+                  (Thread/sleep 25)
+                  (recur (inc attempt))))))]
+      (is (= 202 (:status accepted)))
+      (is (= "seeding" (:status (support/data accepted))))
+      (is (= 200 (:status query-while-seeding)))
+      (is (= "ready" (:status (support/data completed))))
+      (is (= (+ before 2001) (:totalServers (support/data completed))))
+      (is (not= (:revision (support/meta-data accepted))
+                (:revision (support/meta-data completed)))))))
+
+(deftest cursor-mismatch-recovers-through-stable-conflict
+  (support/with-test-system [system]
+    (let [handler (:handler system)
+          first-page (support/request handler :post "/api/eacl/lookup-resources"
+                                      support/lookup-resources-body)
+          cursor (get-in (support/data first-page) [:pageInfo :endCursor])
+          mismatch
+          (support/request handler :post "/api/eacl/lookup-resources"
+                           (assoc support/lookup-resources-body
+                                  :subject support/user-1
+                                  :after cursor))
+          recovery (support/request handler :post "/api/eacl/lookup-resources"
+                                    (assoc support/lookup-resources-body
+                                           :subject support/user-1))]
+      (is (= 409 (:status mismatch)))
+      (is (= "invalid-cursor"
+             (get-in (support/response-body mismatch) [:error :code])))
+      (is (= 200 (:status recovery))))))
+
+(deftest schema-cache-and-seed-mutations
+  (support/with-test-system [system]
+    (let [handler (:handler system)
+          original (support/request handler :get "/api/schema")
+          original-data (support/data original)
+          invalid (support/request handler :put "/api/schema"
+                                   {:source "definition broken {"})
+          after-invalid (support/request handler :get "/api/schema")]
+      (testing "failed schema writes preserve the committed schema"
+        (is (= 422 (:status invalid)))
+        (is (= (:source original-data) (:source (support/data after-invalid)))))
+      (testing "successful writes advance the data revision"
+        (let [written (support/request handler :put "/api/schema"
+                                       {:source data/recursive-schema})]
+          (is (= 200 (:status written)))
+          (is (not= (get-in (support/meta-data original) [:revision])
+                    (get-in (support/meta-data written) [:revision])))
+          (is (= data/recursive-schema (:source (support/data written))))
+          (is (= 200 (:status (support/request handler :put "/api/schema"
+                                              {:source data/default-schema}))))))
+      (testing "cache queries report provenance and eviction advances generation"
+        (let [query-1 (support/request handler :post "/api/eacl/check-permission"
+                                       {:subject support/super-user
+                                        :resource support/server-0
+                                        :permission "view"
+                                        :cache true})
+              query-2 (support/request handler :post "/api/eacl/check-permission"
+                                       {:subject support/super-user
+                                        :resource support/server-0
+                                        :permission "view"
+                                        :cache true})
+              before (get-in (support/meta-data query-2) [:revision])
+              evicted (support/request handler :post "/api/cache/evict" {})]
+          (is (= "miss" (get-in (support/meta-data query-1) [:cacheStatus])))
+          (is (= "hit" (get-in (support/meta-data query-2) [:cacheStatus])))
+          (is (= 200 (:status (support/request handler :get "/api/cache"))))
+          (is (not= before (get-in (support/meta-data evicted) [:revision])))))
+      (testing "overlapping seed work is rejected without leaking executor wrappers"
+        (reset! (:!seed-running? system) true)
+        (try
+          (let [busy (support/request handler :post "/api/seed" {:serverCount 1})]
+            (is (= 409 (:status busy)))
+            (is (= "seed-busy"
+                   (get-in (support/response-body busy) [:error :code]))))
+          (finally
+            (reset! (:!seed-running? system) false)))))))

@@ -1,0 +1,14 @@
+.DS_Store
+.env
+.cpcache/
+.clj-kondo/.cache/
+client/dist/
+client/node_modules/
+client/playwright-report/
+client/test-results/
+client/*.tsbuildinfo
+server/.cpcache/
+server/.nrepl-port
+server/resources/public/assets/
+server/resources/public/index.html
+target/

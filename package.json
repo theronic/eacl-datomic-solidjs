@@ -1,0 +1,15 @@
+{
+  "name": "eacl-solidjs",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "install:client": "npm --prefix client install",
+    "dev:client": "npm --prefix client run dev",
+    "dev:server": "cd server && clojure -M:dev:nrepl",
+    "build": "npm --prefix client run build",
+    "lint": "npm --prefix client run lint",
+    "test:client": "npm --prefix client test",
+    "test:e2e": "npm --prefix client run test:e2e",
+    "verify": "npm run lint && npm run test:client && npm run build"
+  }
+}
