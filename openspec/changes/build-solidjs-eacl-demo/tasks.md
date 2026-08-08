@@ -97,3 +97,4 @@
 - [x] 12.1 Reconcile seed progress only from actual bootstrap responses, keep polling across intermediate mutation revisions, and verify terminal progress/totals converge without replacing the explorer.
 - [x] 12.2 Prevent no-op cursor resets from issuing duplicate page lookups after cache eviction, verify one lookup and one count refetch, and visually separate locally derived descriptions from passthrough ids.
 - [x] 12.3 Keep recursive nested authorization bounded by bypassing complete-answer caching for one-off child permission checks, verify schema writes are no longer starved behind a full forward denotation, and rename the default preset to **Non-recursive**.
+- [x] 12.4 Split page and exact-count timing into independent Solid DOM fragments so page navigation cannot flash or replace stable count provenance.

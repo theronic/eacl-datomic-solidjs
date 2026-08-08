@@ -525,6 +525,14 @@ button {
   color: var(--muted);
 }
 
+.group-card__page-stats,
+.group-card__count-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .pagination-timing {
   display: inline-flex;
   align-items: baseline;

@@ -330,17 +330,23 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
           <TypeBadge type={props.resourceType} />
           <span class="group-card__title">{identifierLabel(props.resourceType)}s</span>
         </DisclosureButton>
-        <Show when={expanded() && !count.loading && !page.loading}>
+        <Show when={expanded()}>
           <div class="group-card__stats">
-            <Show when={count() && page()} fallback={<span class="section-meta">—</span>}>
-              <span class="group-card__range">
-                {rangeStart()}–{rangeEnd()}
-              </span>
-              <PaginationTiming meta={page()?.meta} />
-              <span class="group-card__stats-separator">of</span>
-              <span class="group-card__count">{count()?.data.count}</span>
-              <PaginationTiming meta={count()?.meta} />
-            </Show>
+            <span class="group-card__page-stats">
+              <Show when={page()} fallback={<span class="section-meta">—</span>}>
+                <span class="group-card__range">
+                  {rangeStart()}–{rangeEnd()}
+                </span>
+                <PaginationTiming meta={page()?.meta} />
+              </Show>
+            </span>
+            <span class="group-card__stats-separator">of</span>
+            <span class="group-card__count-stats">
+              <Show when={count()} fallback={<span class="section-meta">—</span>}>
+                <span class="group-card__count">{count()?.data.count}</span>
+                <PaginationTiming meta={count()?.meta} />
+              </Show>
+            </span>
           </div>
         </Show>
       </div>

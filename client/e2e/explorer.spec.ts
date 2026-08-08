@@ -44,15 +44,26 @@ test.describe.serial("real Datomic-backed explorer", () => {
     await page.goto("/");
     await openSegment(page, /^Schema \(/);
     const editor = page.getByRole("textbox", { name: "Spice Schema" });
+    const recursiveTab = page.getByRole("tab", { name: "Recursive", exact: true });
+    const nonRecursiveTab = page.getByRole("tab", {
+      name: "Non-recursive",
+      exact: true,
+    });
+    const startedRecursive = (await recursiveTab.getAttribute("aria-selected")) === "true";
     await editor.fill("definition broken {");
     await page.getByRole("button", { name: "Write Schema" }).click();
     await expect(page.getByText(/invalid|expected|parse/i).first()).toBeVisible();
     await expect(editor).toHaveValue("definition broken {");
 
-    await page.getByRole("tab", { name: "Recursive", exact: true }).click();
+    if (startedRecursive) {
+      await nonRecursiveTab.click();
+      await page.getByRole("button", { name: "Write Schema" }).click();
+      await expect(page.getByRole("button", { name: "Write Schema" })).toBeDisabled();
+    }
+    await recursiveTab.click();
     await page.getByRole("button", { name: "Write Schema" }).click();
     await expect(page.getByRole("button", { name: "Write Schema" })).toBeDisabled();
-    await page.getByRole("tab", { name: "Non-recursive", exact: true }).click();
+    await nonRecursiveTab.click();
     await page.getByRole("button", { name: "Write Schema" }).click();
     await expect(page.getByRole("button", { name: "Write Schema" })).toBeDisabled();
   });

@@ -10,26 +10,47 @@ import { bootstrap, jsonResponse, success } from "./fixtures";
 describe("reactive resource paging", () => {
   it("resets page cursors on page-size changes without coupling the exact count", async () => {
     const requestBodies: Array<{ path: string; body: Record<string, unknown> }> = [];
+    let releaseSecondPage: () => void = () => undefined;
+    const secondPageGate = new Promise<void>((resolve) => {
+      releaseSecondPage = resolve;
+    });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === "/api/bootstrap") return jsonResponse(success(bootstrap));
       if (path === "/api/eacl/lookup-resources") {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         requestBodies.push({ path, body });
+        if (body.after) await secondPageGate;
         const suffix = body.after ? "page-2" : "page-1";
-        return jsonResponse(success({
-          items: [{ type: "server", id: `server-${suffix}` }],
-          pageInfo: {
-            startCursor: "start",
-            endCursor: "next-cursor",
-            hasNextPage: !body.after,
-            hasPreviousPage: Boolean(body.after),
+        return jsonResponse({
+          ...success({
+            items: [{ type: "server", id: `server-${suffix}` }],
+            pageInfo: {
+              startCursor: "start",
+              endCursor: "next-cursor",
+              hasNextPage: !body.after,
+              hasPreviousPage: Boolean(body.after),
+            },
+          }),
+          meta: {
+            revision: "d100.c0",
+            requestId: "page-request",
+            elapsedMs: body.after ? 4.7 : 3.2,
+            cacheStatus: "hit" as const,
           },
-        }));
+        });
       }
       if (path === "/api/eacl/count-resources") {
         requestBodies.push({ path, body: JSON.parse(String(init?.body)) });
-        return jsonResponse(success({ count: 48 }));
+        return jsonResponse({
+          ...success({ count: 48 }),
+          meta: {
+            revision: "d100.c0",
+            requestId: "count-request",
+            elapsedMs: 60.9,
+            cacheStatus: "miss" as const,
+          },
+        });
       }
       if (path === "/api/cache/evict") {
         return jsonResponse(success({ status: "evicted" }, "d100.c1"));
@@ -88,12 +109,27 @@ describe("reactive resource paging", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Server Page 1.*server-page-1/i }));
     expect(await screen.findByRole("button", { name: /User 1/ })).toBeInTheDocument();
+    const countStats = group.querySelector(".group-card__count-stats");
+    expect(countStats).toHaveTextContent("48(60.9msmiss)");
     fireEvent.click(
       screen
         .getAllByRole("button", { name: "Next" })
         .find((button) => !(button as HTMLButtonElement).disabled)!,
     );
+    await waitFor(() => {
+      expect(
+        requestBodies.some(({ path, body }) =>
+          path.endsWith("lookup-resources") && body.after === "next-cursor",
+        ),
+      ).toBe(true);
+    });
+    expect(group.querySelector(".group-card__count-stats")).toBe(countStats);
+    expect(countStats).toHaveTextContent("48(60.9msmiss)");
+    releaseSecondPage();
     await screen.findByText("Server Page 2");
+    expect(group.querySelector(".group-card__count-stats")).toBe(countStats);
+    expect(group.querySelector(".group-card__page-stats"))
+      .toHaveTextContent("21–21(4.7mshit)");
     const countRequestsAfterEviction = requestBodies.filter(({ path }) =>
       path.endsWith("count-resources"),
     ).length;

@@ -60,12 +60,16 @@ The resources panel SHALL group authorized resources by schema-derived type, fet
 - **THEN** the client fetches its first authorized page and one independent exact count, displays `range (page timing/status) of total (count timing/status)` with the total exactly once, and renders no more than the selected page size
 
 #### Scenario: Collapse a resource type
-- **WHEN** the user collapses a resource-type group or its query inputs begin refreshing
-- **THEN** its retained page range, count, and timing details are hidden until current expanded results are available
+- **WHEN** the user collapses a resource-type group
+- **THEN** its retained page range, count, and timing details are hidden until the group is expanded again
 
 #### Scenario: Navigate to next page
 - **WHEN** a group has a next cursor and the user clicks next
 - **THEN** only that group's page resource requests the cursor continuation while its exact count and other groups remain stable
+
+#### Scenario: Update independent pagination timing
+- **WHEN** a new resource page is pending or replaces the prior page
+- **THEN** only the range and page timing fragment updates while the exact count and its timing/cache provenance retain the same Solid DOM fragment without flashing
 
 #### Scenario: Recover from invalid cursor
 - **WHEN** a page request returns the API's `invalid-cursor` conflict
