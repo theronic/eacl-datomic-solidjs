@@ -1,5 +1,6 @@
 (ns eacl-solidjs.integration-test
   (:require [clojure.test :refer [deftest is testing]]
+            [eacl.core :as eacl]
             [eacl-solidjs.data :as data]
             [eacl-solidjs.test-support :as support]))
 
@@ -55,11 +56,37 @@
       (is (not (re-find #"displayName" (:body subjects))))
       (is (= 200 (:status relationships)))
       (is (= 10 (count (:items (support/data relationships)))))
+      (is (= "disabled"
+             (get-in (support/meta-data relationships) [:cacheStatus])))
       (is (not (re-find #"displayName" (:body relationships))))
       (is (= true (get-in (support/data check) [:allowed])))
       (is (= 200 (:status platforms)))
       (is (= [{:type "platform" :id "platform"}]
              (:items (support/data platforms)))))))
+
+(deftest nested-permission-filter-bypasses-complete-answer-cache
+  (support/with-test-system [system]
+    (let [queries (atom [])
+          handler (:handler system)
+          response
+          (with-redefs [eacl/check-permission
+                        (fn [_ query]
+                          (swap! queries conj query)
+                          {:allowed? true :cached? false})]
+            (support/request
+             handler :post "/api/eacl/read-relationships"
+             {:subject support/account-0
+              :resourceType "server"
+              :relation "account"
+              :authorizationSubject support/super-user
+              :permission "view"
+              :pageSize 10
+              :cache true}))]
+      (is (= 200 (:status response)))
+      (is (= 10 (count @queries)))
+      (is (every? #(false? (:cache? %)) @queries))
+      (is (= "disabled"
+             (get-in (support/meta-data response) [:cacheStatus]))))))
 
 (deftest asynchronous-seed-keeps-eacl-queries-available
   (support/with-test-system [system]

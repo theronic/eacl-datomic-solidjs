@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { setFetchImplementation } from "../src/api";
+import { CachePanel } from "../src/components/CachePanel";
 import { Header } from "../src/components/Header";
 import { DetailPanel } from "../src/components/DetailPanel";
 import { ResourceTreePanel } from "../src/components/ResourceTree";
@@ -30,6 +31,9 @@ describe("reactive resource paging", () => {
         requestBodies.push({ path, body: JSON.parse(String(init?.body)) });
         return jsonResponse(success({ count: 48 }));
       }
+      if (path === "/api/cache/evict") {
+        return jsonResponse(success({ status: "evicted" }, "d100.c1"));
+      }
       if (path === "/api/eacl/lookup-subjects") {
         return jsonResponse(success({
           items: [{ type: "user", id: "user-1" }],
@@ -43,6 +47,7 @@ describe("reactive resource paging", () => {
     render(() => (
       <AppStateProvider>
         <Header />
+        <CachePanel />
         <ResourceTreePanel />
         <DetailPanel />
       </AppStateProvider>
@@ -52,8 +57,35 @@ describe("reactive resource paging", () => {
     const group = groupButton.closest(".group-card") as HTMLElement;
     fireEvent.click(groupButton);
     await screen.findByText("Server Page 1");
+    expect(screen.getByText("Server Page 1").parentElement)
+      .toHaveTextContent("Server Page 1 server-page-1");
     expect(await within(group).findByText("1–1")).toBeInTheDocument();
     expect(within(group).getByText("48")).toBeInTheDocument();
+
+    const lookupsBeforeEviction = requestBodies.filter(({ path }) =>
+      path.endsWith("lookup-resources"),
+    ).length;
+    const countsBeforeEviction = requestBodies.filter(({ path }) =>
+      path.endsWith("count-resources"),
+    ).length;
+    fireEvent.click(screen.getByRole("button", { name: /^cache$/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Evict Cache" }));
+    await waitFor(() => {
+      expect(
+        requestBodies.filter(({ path }) => path.endsWith("lookup-resources")),
+      ).toHaveLength(lookupsBeforeEviction + 1);
+      expect(
+        requestBodies.filter(({ path }) => path.endsWith("count-resources")),
+      ).toHaveLength(countsBeforeEviction + 1);
+    });
+    await Promise.resolve();
+    expect(
+      requestBodies.filter(({ path }) => path.endsWith("lookup-resources")),
+    ).toHaveLength(lookupsBeforeEviction + 1);
+    expect(
+      requestBodies.filter(({ path }) => path.endsWith("count-resources")),
+    ).toHaveLength(countsBeforeEviction + 1);
+
     fireEvent.click(screen.getByRole("button", { name: /Server Page 1.*server-page-1/i }));
     expect(await screen.findByRole("button", { name: /User 1/ })).toBeInTheDocument();
     fireEvent.click(
@@ -62,7 +94,9 @@ describe("reactive resource paging", () => {
         .find((button) => !(button as HTMLButtonElement).disabled)!,
     );
     await screen.findByText("Server Page 2");
-    expect(requestBodies.filter(({ path }) => path.endsWith("count-resources"))).toHaveLength(1);
+    const countRequestsAfterEviction = requestBodies.filter(({ path }) =>
+      path.endsWith("count-resources"),
+    ).length;
 
     fireEvent.change(screen.getByRole("combobox", { name: "Page size" }), {
       target: { value: "50" },
@@ -72,7 +106,8 @@ describe("reactive resource paging", () => {
       expect(pages.at(-1)?.body).toMatchObject({ pageSize: 50 });
       expect(pages.at(-1)?.body.after).toBeUndefined();
     });
-    expect(requestBodies.filter(({ path }) => path.endsWith("count-resources"))).toHaveLength(1);
+    expect(requestBodies.filter(({ path }) => path.endsWith("count-resources")))
+      .toHaveLength(countRequestsAfterEviction);
 
     fireEvent.click(groupButton);
     expect(within(group).queryByText("48")).not.toBeInTheDocument();

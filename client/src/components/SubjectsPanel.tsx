@@ -146,6 +146,7 @@ export function SubjectsPanel(): JSX.Element {
                         <span class="resource-caption__name">
                           {identifierLabel(subject.id)}
                         </span>
+                        {" "}
                         <span class="resource-caption__id">{subject.id}</span>
                       </span>
                     </button>

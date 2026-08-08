@@ -49,10 +49,10 @@ test.describe.serial("real Datomic-backed explorer", () => {
     await expect(page.getByText(/invalid|expected|parse/i).first()).toBeVisible();
     await expect(editor).toHaveValue("definition broken {");
 
-    await page.getByRole("tab", { name: "Recursive" }).click();
+    await page.getByRole("tab", { name: "Recursive", exact: true }).click();
     await page.getByRole("button", { name: "Write Schema" }).click();
     await expect(page.getByRole("button", { name: "Write Schema" })).toBeDisabled();
-    await page.getByRole("tab", { name: "Default" }).click();
+    await page.getByRole("tab", { name: "Non-recursive", exact: true }).click();
     await page.getByRole("button", { name: "Write Schema" }).click();
     await expect(page.getByRole("button", { name: "Write Schema" })).toBeDisabled();
   });
@@ -146,6 +146,7 @@ test.describe.serial("real Datomic-backed explorer", () => {
     await expect(page.getByRole("heading", { name: "Resources" })).toBeVisible();
     await expect(serverGroup).toBeVisible();
     await expect.poll(() => resourceQueriesDuringSeed).toBeGreaterThan(0);
+    await expect.poll(() => seedReads).toBeGreaterThanOrEqual(2);
     await expect(page.locator(".seed-progress-banner")).toBeHidden();
     await expect(page.getByRole("button", { name: "Seed DB" })).toBeEnabled();
   });

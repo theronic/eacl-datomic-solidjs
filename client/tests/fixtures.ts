@@ -29,7 +29,7 @@ export const schema: SchemaInfo = {
   relationCount: 2,
   permissionCount: 2,
   presets: [
-    { id: "default", label: "Default", schema: schemaSource },
+    { id: "default", label: "Non-recursive", schema: schemaSource },
     { id: "recursive", label: "Recursive", schema: `${schemaSource}\n// recursive` },
   ],
 };

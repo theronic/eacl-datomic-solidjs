@@ -61,6 +61,10 @@ The server SHALL expose `POST /api/eacl/read-relationships` for bounded, cursor-
 - **WHEN** the client submits a valid parent subject, target resource type, relation, page size, and optional cursor
 - **THEN** the server returns the bounded matching relationships and opaque page metadata without enumerating unrelated relationships
 
+#### Scenario: Filter a recursive nested page
+- **WHEN** a bounded relationship page is filtered by permission under a recursive schema
+- **THEN** the server evaluates each distinct child with cache-bypassed target-anchored point authorization so it does not materialize a complete forward denotation or starve schema writes
+
 ### Requirement: Permission check operation
 The server SHALL expose `POST /api/eacl/check-permission` and SHALL return the EACL decision with timing and cache provenance.
 

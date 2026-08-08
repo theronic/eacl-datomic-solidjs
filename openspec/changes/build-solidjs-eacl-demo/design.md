@@ -88,6 +88,8 @@ CSS is copied into this standalone demo rather than imported across repositories
 
 The server will call EACL's authenticated pagination and exact count operations directly, never enumerate a complete result set to paginate it in the client, and never serialize Datomic entities. Each expanded resource group performs one page query and one independent exact-count query; the UI renders the total once alongside the page range and labels both timings without duplicating the count. Relationship children load only when expanded; metadata that changes only with schema revision can be memoized on the server. Blocking Datomic/EACL work runs off the client and is instrumented per operation.
 
+Nested relationship pages are a sweep of distinct child resources. Their per-child permission decisions therefore bypass completed-answer caching, as recommended by EACL for non-repeating batch checks. This keeps recursive point authorization target-anchored instead of computing a complete forward denotation that scales with every reachable resource and holds the EACL schema read lock for the duration. The bounded relationship enumeration itself may still honor the requested cache mode; the combined authorization-filtered operation reports cache status as disabled.
+
 The graph bundle is lazy, production assets are compressed/cacheable, and the client keeps previous unrelated panel data during focused refetches. A repeatable 10,000-server benchmark will verify bounded response sizes and a documented local warmed-cache p95 budget of 250 ms for default-page authorization requests; CI functional tests will avoid hardware-sensitive absolute timing assertions.
 
 ### 10. Verify boundaries at multiple levels
@@ -98,6 +100,7 @@ Backend unit tests cover decoding, validation, status mapping, lifecycle, and re
 
 - **[Risk] HTTP refetching can duplicate expensive work when inputs change rapidly** → Abort superseded client requests, key resources narrowly, debounce only free-text inputs, and keep server operations paginated and independently observable.
 - **[Risk] Aborting fetch does not guarantee already-running Datomic work stops** → Enforce input and page bounds, configure server request timeouts, and measure cancellation-heavy flows so abandoned work remains bounded.
+- **[Risk] A long EACL authorization read can delay `write-schema!` while it holds the schema read lock** → Keep application sweeps bounded and bypass complete-answer caching for distinct point checks. This is writer starvation rather than a cyclic deadlock; liveness for other unexpectedly long EACL reads remains an EACL-level concern.
 - **[Risk] A cursor becomes invalid after subject, permission, page size, schema, or data changes** → Scope cursor stacks to the complete query identity, clear them before invalidation, and return a stable `invalid-cursor` conflict for recovery to page one.
 - **[Risk] Global cache eviction affects concurrent demo users** → Document the demo-wide scope, serialize eviction, and avoid presenting this administrative endpoint as a tenant-safe production design.
 - **[Risk] Schema and seed endpoints are dangerous on a network-exposed server** → Treat the default all-interface bind as trusted-LAN development only, document the loopback override and firewall requirement, cap payloads, sanitize errors, and state that production authorization is out of scope.

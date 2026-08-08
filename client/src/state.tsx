@@ -69,11 +69,7 @@ export const AppStateProvider: ParentComponent = (props) => {
   const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(
     new Set(preferences.expanded),
   );
-  const seeding = createMemo(
-    () =>
-      seedProgress()?.status === "seeding" ||
-      (!bootstrap.error && bootstrap()?.data.status === "seeding"),
-  );
+  const seeding = createMemo(() => seedProgress()?.status === "seeding");
 
   const invalidateQueries = () => setQueryGeneration((value) => value + 1);
   const setSubjectId = (value: string) => {
@@ -105,18 +101,23 @@ export const AppStateProvider: ParentComponent = (props) => {
     });
   };
 
-  createEffect(() => {
-    if (bootstrap.error) return;
-    const envelope = bootstrap();
-    if (!envelope) return;
-    if (!mutationRevision()) setMutationRevision(envelope.meta.revision);
-    setSeedProgress(envelope.data.seed);
-    const permissions = Object.values(envelope.data.schema.permissionsByType).flat();
-    if (!permissions.includes(permission())) {
-      setPermissionSignal(permissions[0] ?? "");
-      invalidateQueries();
-    }
-  });
+  createEffect(
+    on(
+      () => bootstrap(),
+      (envelope) => {
+        if (!envelope) return;
+        if (!mutationRevision()) setMutationRevision(envelope.meta.revision);
+        setSeedProgress(envelope.data.seed);
+        const permissions = Object.values(
+          envelope.data.schema.permissionsByType,
+        ).flat();
+        if (!permissions.includes(permission())) {
+          setPermissionSignal(permissions[0] ?? "");
+          invalidateQueries();
+        }
+      },
+    ),
+  );
 
   createEffect(
     on(

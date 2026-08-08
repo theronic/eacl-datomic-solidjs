@@ -46,6 +46,8 @@ describe("subjects and permissions", () => {
     fireEvent.click(admin);
     expect(admin).toHaveAttribute("aria-pressed", "true");
     await screen.findByText("21 total");
+    expect(screen.getByText("User 1", { selector: ".resource-caption__name" }).parentElement)
+      .toHaveTextContent("User 1 user-1");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await screen.findByText("Page 2");
     const requestsBeforeSelection = subjectRequests.length;

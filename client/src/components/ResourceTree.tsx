@@ -104,7 +104,7 @@ function RelationshipGroup(props: {
         app.cacheEnabled(),
         app.queryGeneration(),
       ] as const,
-      () => setCursors([]),
+      () => setCursors((current) => (current.length ? [] : current)),
       { defer: true },
     ),
   );
@@ -219,6 +219,7 @@ function ResourceNode(props: {
             <span class="resource-caption__name">
               {identifierLabel(props.resource.id)}
             </span>
+            {" "}
             <span class="resource-caption__id">{props.resource.id}</span>
           </span>
         </button>
@@ -299,7 +300,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
         app.cacheEnabled(),
         app.queryGeneration(),
       ] as const,
-      () => setCursors([]),
+      () => setCursors((current) => (current.length ? [] : current)),
       { defer: true },
     ),
   );

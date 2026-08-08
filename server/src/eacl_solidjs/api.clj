@@ -196,7 +196,12 @@
                        :cache? cache?}
                 after (assoc :after after))]
     (run-eacl
-     system request :read-relationships cache?
+     system request :read-relationships
+     ;; Permission checks on a nested page are a sweep of distinct resources.
+     ;; Bypass completed-answer caching so recursive point checks use EACL's
+     ;; target-anchored reverse evaluator instead of materializing the complete
+     ;; forward denotation while holding the client's schema read lock.
+     (if authorization-subject false cache?)
      #(let [result (eacl/read-relationships (:acl system) query)]
         (if authorization-subject
           (let [decisions
@@ -207,7 +212,7 @@
                     {:subject authorization-subject
                      :permission authorization-permission
                      :resource (:resource relationship)
-                     :cache? cache?}))
+                     :cache? false}))
                  (:data result))
                 allowed
                 (->> (map vector (:data result) decisions)
@@ -216,8 +221,7 @@
                      vec)]
             (assoc result
                    :data allowed
-                   :cached? (and (:cached? result)
-                                 (every? :cached? decisions))))
+                   :cached? false))
           result))
      (fn [result]
        {:items (mapv relationship->map (:data result))

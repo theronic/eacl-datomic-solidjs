@@ -95,7 +95,7 @@ definition server {
 }")
 
 (def schema-presets
-  [{:id "default" :label "Default" :schema default-schema}
+  [{:id "default" :label "Non-recursive" :schema default-schema}
    {:id "recursive" :label "Recursive" :schema recursive-schema}])
 
 (def quick-subjects

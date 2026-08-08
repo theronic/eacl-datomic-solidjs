@@ -62,7 +62,7 @@ function PermissionSubjects(props: {
         app.cacheEnabled(),
         app.queryGeneration(),
       ] as const,
-      () => setCursors([]),
+      () => setCursors((current) => (current.length ? [] : current)),
       { defer: true },
     ),
   );
