@@ -12,6 +12,7 @@ EACL needs a small, fast reference application that demonstrates Datomic Pro aut
 - Allow users to edit and write the Spice schema, surface validation failures without replacing the active schema, and reactively refresh schema-dependent queries after a successful write.
 - Pretty-print the cache snapshot and update that display only when the user clicks a dedicated **Refresh cache** button; ordinary queries, cache toggles, expansion, and cache eviction do not silently refresh the displayed snapshot.
 - Optimize the hot path with server-side EACL pagination/count APIs, bounded payloads, keyed fine-grained rendering, stable query identities, request cancellation, and focused loading states.
+- Bound each initial resource total at `:count-limit 50000`, render truncated totals as `50k+`, and let an explicit click double only that group's limit until EACL reports exhaustion and the exact total.
 - Add automated backend, frontend, HTTP integration, and browser-flow coverage plus setup and API documentation.
 
 ## Capabilities

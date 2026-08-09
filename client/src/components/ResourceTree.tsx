@@ -32,6 +32,14 @@ import {
 } from "./Common";
 
 const resourceKey = (resource: EaclObject) => `${resource.type}:${resource.id}`;
+const initialCountLimit = 50_000;
+const countFormatter = new Intl.NumberFormat("en-US");
+const compactCountFormatter = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const formatTruncatedCount = (count: number) =>
+  compactCountFormatter.format(count).toLocaleLowerCase("en-US");
 
 function PaginationTiming(props: { meta?: ApiMeta }): JSX.Element {
   return (
@@ -251,7 +259,27 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   const pageRequest = new LatestRequest();
   const countRequest = new LatestRequest();
   const [cursors, setCursors] = createSignal<string[]>([]);
+  const [countDemandVersion, setCountDemandVersion] = createSignal(0);
+  let activeCountScope = "";
+  let activeCountLimit = initialCountLimit;
   const cursor = () => cursors().at(-1);
+  const countScope = () =>
+    JSON.stringify([
+      app.subjectId(),
+      app.permission(),
+      props.resourceType,
+      app.cacheEnabled(),
+      app.mutationRevision(),
+    ]);
+  const countLimit = () => {
+    countDemandVersion();
+    const scope = countScope();
+    if (scope !== activeCountScope) {
+      activeCountScope = scope;
+      activeCountLimit = initialCountLimit;
+    }
+    return activeCountLimit;
+  };
   const base = () =>
     expanded() && app.permission()
       ? ([
@@ -266,6 +294,10 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
     const value = base();
     return value ? ([...value, app.pageSize(), cursor() ?? ""] as const) : false;
   };
+  const countSource = () => {
+    const value = base();
+    return value ? ([...value, countLimit()] as const) : false;
+  };
   const [page, { refetch: refetchPage }] = createResource(pageSource, (input) =>
     pageRequest.run<ObjectPage>("/api/eacl/lookup-resources", {
       method: "POST",
@@ -279,7 +311,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
       }),
     }),
   );
-  const [count, { refetch: refetchCount }] = createResource(base, (input) =>
+  const [count, { refetch: refetchCount }] = createResource(countSource, (input) =>
     countRequest.run<ResourceCount>("/api/eacl/count-resources", {
       method: "POST",
       body: JSON.stringify({
@@ -287,9 +319,22 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
         permission: input[1],
         resourceType: input[2],
         cache: input[3],
+        countLimit: input[5],
       }),
     }),
   );
+
+  const doubleCountLimit = () => {
+    const result = count()?.data;
+    if (!result?.truncated || count.loading) return;
+    const currentLimit = Math.max(countLimit(), result.limit);
+    const nextLimit = Math.min(Number.MAX_SAFE_INTEGER, currentLimit * 2);
+    if (nextLimit > currentLimit) {
+      activeCountScope = countScope();
+      activeCountLimit = nextLimit;
+      setCountDemandVersion((version) => version + 1);
+    }
+  };
 
   createEffect(
     on(
@@ -343,8 +388,29 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
             <span class="group-card__stats-separator">of</span>
             <span class="group-card__count-stats">
               <Show when={count()} fallback={<span class="section-meta">—</span>}>
-                <span class="group-card__count">{count()?.data.count}</span>
-                <PaginationTiming meta={count()?.meta} />
+                {(envelope: () => ApiSuccess<ResourceCount>) => (
+                  <>
+                    <Show
+                      when={envelope().data.truncated}
+                      fallback={
+                        <span class="group-card__count">
+                          {countFormatter.format(envelope().data.count)}
+                        </span>
+                      }
+                    >
+                      <button
+                        type="button"
+                        class="group-card__count group-card__count-button"
+                        disabled={count.loading}
+                        aria-label={`Count beyond ${countFormatter.format(envelope().data.count)} ${props.resourceType} resources`}
+                        onClick={doubleCountLimit}
+                      >
+                        {formatTruncatedCount(envelope().data.count)}+
+                      </button>
+                    </Show>
+                    <PaginationTiming meta={envelope().meta} />
+                  </>
+                )}
               </Show>
             </span>
           </div>
