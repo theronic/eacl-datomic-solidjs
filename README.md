@@ -10,11 +10,92 @@ The information architecture and attributed stylesheet come from
 
 ## Quickstart
 
-Requirements: JDK 22, Clojure CLI, Node.js 22, npm, Datomic Pro installed at
-`~/datomic/1.0.7705`, and access to Datomic Pro dependencies. This workspace
-version uses the EACL checkout at
-`../eacl` (commit `45be4cc3b94c876fe2395afc992bff1cf8f03676`) so its generated formal
-kernel classes remain available.
+Requirements:
+
+- JDK 26 for the default published EACL artifact,
+- a current Clojure CLI,
+- Node.js 22 or newer and npm,
+- access to the Datomic Pro dependencies.
+
+For the quickest development start, no transactor or security key is needed.
+The server script uses an in-memory Datomic database:
+
+```bash
+npm run install:client
+npm run dev:server
+# In another terminal:
+npm run dev:client
+```
+
+The same root scripts can be invoked with pnpm, for example
+`pnpm run dev:server`.
+
+Open <http://127.0.0.1:5173>. The default server resolves
+`dev.eacl/eacl-datomic` version `8.0.0-SNAPSHOT` from Clojars. That artifact
+already contains the generated EACL kernel classes: dependency resolution and
+application startup do not install formal tools or run verification.
+
+### Local EACL development
+
+To edit EACL and the application together, clone EACL beside this repository
+as `core` (or adjust both the `:local/root` in `server/deps.edn` and the
+`prep:local-eacl` path in `package.json`):
+
+```text
+workspace/
+  core/
+  eacl-datomic-solidjs/
+```
+
+The `:local-eacl` alias replaces the Clojars adapter with that checkout. Source
+preparation is deliberately separate from every application-start command.
+
+> [!WARNING]
+> Run the following preparation command only when you choose local EACL source
+> development. It may download EACL's checksum-verified formal toolchain,
+> including Dafny/Boogie/Z3, Apalache, and TLA+ tools, plus pinned Node
+> packages. It generates and stages JVM/browser runtimes and can consume
+> substantial disk space and time. It does not run the full formal suite.
+
+```bash
+# Once after cloning EACL, and again after generated-kernel changes:
+npm run prep:local-eacl
+
+# Then start the local-source mode (the client command is unchanged):
+npm run dev:server:local-eacl
+```
+
+To target a JVM older than 26, invoke EACL's preparation command directly with
+the desired release before starting local mode, for example:
+
+```bash
+cd ../core/modules/eacl
+clojure -T:build prep :java-release 22
+cd ../../../eacl-datomic-solidjs
+npm run dev:server:local-eacl
+```
+
+The selected class files run on that Java release and newer JVMs. The standard
+Clojars artifact targets Java 26, so older-JVM consumers must use an explicitly
+lower-targeted source or custom artifact build.
+
+### IntelliJ IDEA
+
+Install the Cursive plugin, open `eacl-datomic-solidjs`, and add
+`server/deps.edn` as a Clojure Deps project if Cursive does not detect it
+automatically. Select JDK 26 for published-artifact mode, or the JVM targeted
+by your explicit local EACL preparation.
+
+The shared **EACL App**, **EACL Server**, and **EACL Client** run configurations
+appear under Run | Edit Configurations. Run **EACL App** to start the Clojars
+server and client together. **EACL App (Local EACL)** and
+**EACL Server (Local EACL)** select the `:local-eacl` alias; they never prepare
+EACL automatically. After an explicit local preparation, reload the Clojure
+Deps project once if IntelliJ has not indexed the newly generated Java classes.
+Machine-specific `.idea` and `*.iml` files remain ignored; only the portable
+run configurations under `.run/` are shared.
+
+### Durable Datomic development
 
 Start the Datomic `:dev` transactor in its own terminal. Its embedded H2 data is
 stored under `~/datomic/1.0.7705/data` and survives application/JVM restarts:
@@ -31,10 +112,8 @@ value in a local secret manager or shell profile, never in this repository.
 
 ```bash
 export EACL_SOLIDJS_SECURITY_KEY='replace-with-your-stable-local-key'
-npm run install:client
 npm run build
-cd server
-clojure -M:run
+npm run start:server
 ```
 
 Open <http://127.0.0.1:8088> locally or
@@ -44,9 +123,8 @@ durable `datomic:dev://localhost:4334/eacl-solidjs` database with 48 foundation
 servers on first creation. Schema edits and later seed data persist when the app
 or REPL restarts as long as the H2 transactor data directory is retained.
 
-For split development, start the server through the REPL workflow below, then
-run `npm run dev:client` from the project root. Vite proxies `/api` to port
-8088 and hot-reloads SolidJS.
+For split development, Vite proxies `/api` to port 8088 and hot-reloads
+SolidJS.
 
 ## Architecture
 
@@ -97,10 +175,11 @@ Discover a running server:
 clj-nrepl-eval --discover-ports
 ```
 
-If needed, start one from `server/`:
+If needed, start one from the project root. It uses the Clojars artifact and an
+in-memory Datomic database:
 
 ```bash
-clojure -M:dev:nrepl
+npm run dev:repl
 ```
 
 Start or restart HTTP without restarting the JVM:
@@ -114,6 +193,19 @@ Run all backend tests through the persistent nREPL (never a cold test JVM):
 ```bash
 clj-nrepl-eval -p PORT --timeout 180000 "(do (require '[dev :as dev] :reload) (dev/run-tests!))"
 ```
+
+To run Clojure directly from `server/` with the published artifact:
+
+```bash
+clojure -M:run
+```
+
+For local source mode, explicitly prepare the EACL checkout as warned above,
+then run `clojure -M:local-eacl:run`. If startup reports
+`CacheKernel.CacheCandidate`, the selected local checkout has not been prepared
+or IntelliJ has not reloaded its classpath. If dependency resolution says that
+`../../core/modules/eacl-datomic` does not exist, clone EACL as the `core`
+sibling shown above or update that `:local/root` in `server/deps.edn`.
 
 Client and browser verification:
 
