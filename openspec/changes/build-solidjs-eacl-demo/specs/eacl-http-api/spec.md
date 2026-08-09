@@ -36,12 +36,20 @@ The server SHALL provide a `/api/*` endpoint for paged known-subject identifiers
 - **WHEN** the client requests a valid known-subject page
 - **THEN** the server returns only the requested bounded page, passthrough subject type/id pairs, and continuation metadata without display-name enrichment
 
-### Requirement: Resource lookup and exact count operations
-The server SHALL expose `POST /api/eacl/lookup-resources` and `POST /api/eacl/count-resources` as thin adapters over EACL's authenticated paginated lookup and exact count operations.
+### Requirement: Resource lookup and demand-bounded count operations
+The server SHALL expose `POST /api/eacl/lookup-resources` and `POST /api/eacl/count-resources` as thin adapters over EACL's authenticated paginated lookup and demand-bounded count operations. Count requests SHALL accept a validated positive `countLimit`, pass it to EACL as `:count-limit`, and return `count`, `limit`, and `truncated`.
 
 #### Scenario: First authorized resource page
 - **WHEN** a valid subject, permission, resource type, supported page size, and cache mode are submitted without a cursor
-- **THEN** lookup returns only the authorized first page with opaque `pageInfo`, while count returns the exact authorized total for the same non-page query
+- **THEN** lookup returns only the authorized first page with opaque `pageInfo`, while count returns at most the requested limit and reports whether more authorized resources exist
+
+#### Scenario: Reject an invalid count limit
+- **WHEN** `countLimit` is absent, non-integral, zero, or negative
+- **THEN** the server returns `400 invalid-count-limit` before invoking EACL
+
+#### Scenario: Count reaches graph exhaustion
+- **WHEN** EACL exhausts the authorized graph before the submitted count limit
+- **THEN** the response reports `truncated: false` and `count` is the exact authorized total
 
 #### Scenario: Continue an authorized resource page
 - **WHEN** a client resubmits the same non-page query with the returned `endCursor`

@@ -53,11 +53,23 @@ The subjects panel SHALL display quick subjects, a bounded known-subject page, s
 - **THEN** the client selects the first remaining valid permission or an explicit no-permission state before issuing replacement queries
 
 ### Requirement: Cursor-paginated authorized resource tree
-The resources panel SHALL group authorized resources by schema-derived type, fetch EACL page and exact count results independently, render stable keyed items, and support first, previous, and next navigation with opaque cursor stacks.
+The resources panel SHALL group authorized resources by schema-derived type, fetch EACL page and demand-bounded count results independently, render stable keyed items, and support first, previous, and next navigation with opaque cursor stacks. Each count SHALL start at `countLimit: 50000`; a truncated total SHALL render with `+` as a button whose activation doubles only that group's limit until EACL reports exhaustion.
 
 #### Scenario: Expand a resource type
 - **WHEN** the user expands a resource-type group
-- **THEN** the client fetches its first authorized page and one independent exact count, displays `range (page timing/status) of total (count timing/status)` with the total exactly once, and renders no more than the selected page size
+- **THEN** the client fetches its first authorized page and one independent count bounded at 50,000, displays `range (page timing/status) of total (count timing/status)` with a truncated total such as `50k+` exactly once, and renders no more than the selected page size
+
+#### Scenario: Increase a truncated total
+- **WHEN** the user activates a truncated count such as `50k+`
+- **THEN** only that count resource refetches with double its prior `countLimit`, the page and other groups remain stable, and the prior count remains visible while the request is pending
+
+#### Scenario: Reach an exact total
+- **WHEN** a count response reports `truncated: false`
+- **THEN** the UI renders the exact formatted total as non-clickable text and performs no further count work without a semantic query change
+
+#### Scenario: Reset count demand for a new query
+- **WHEN** subject, permission, cache mode, data revision, or schema revision changes
+- **THEN** the affected group's count limit resets to 50,000 before its replacement request, while a page-size or cursor-only change does not refetch or widen the count
 
 #### Scenario: Collapse a resource type
 - **WHEN** the user collapses a resource-type group
@@ -65,11 +77,11 @@ The resources panel SHALL group authorized resources by schema-derived type, fet
 
 #### Scenario: Navigate to next page
 - **WHEN** a group has a next cursor and the user clicks next
-- **THEN** only that group's page resource requests the cursor continuation while its exact count and other groups remain stable
+- **THEN** only that group's page resource requests the cursor continuation while its bounded-or-exact count and other groups remain stable
 
 #### Scenario: Update independent pagination timing
 - **WHEN** a new resource page is pending or replaces the prior page
-- **THEN** only the range and page timing fragment updates while the exact count and its timing/cache provenance retain the same Solid DOM fragment without flashing
+- **THEN** only the range and page timing fragment updates while the count and its timing/cache provenance retain the same Solid DOM fragment without flashing
 
 #### Scenario: Recover from invalid cursor
 - **WHEN** a page request returns the API's `invalid-cursor` conflict

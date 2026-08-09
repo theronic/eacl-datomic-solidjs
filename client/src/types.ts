@@ -53,7 +53,8 @@ export interface KnownSubjectPage {
 
 export interface ResourceCount {
   count: number;
-  truncated?: boolean;
+  limit: number;
+  truncated: boolean;
 }
 
 export interface Relationship {

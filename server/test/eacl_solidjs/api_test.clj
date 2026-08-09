@@ -36,3 +36,21 @@
       (is (= 400 (:status unknown-permission)))
       (is (= "unknown-schema-permission"
              (get-in (support/response-body unknown-permission) [:error :code]))))))
+
+(deftest count-limit-validation-rejects-before-eacl
+  (support/with-test-system [system]
+    (let [handler (:handler system)
+          base-body (assoc (dissoc support/lookup-resources-body :pageSize)
+                           :cache false)
+          metrics-before @(:!metrics system)]
+      (doseq [body [(dissoc base-body :countLimit)
+                    (assoc base-body :countLimit 0)
+                    (assoc base-body :countLimit -1)
+                    (assoc base-body :countLimit 1.5)]]
+        (let [response (support/request handler :post
+                                        "/api/eacl/count-resources"
+                                        body)]
+          (is (= 400 (:status response)))
+          (is (= "invalid-count-limit"
+                 (get-in (support/response-body response) [:error :code])))))
+      (is (= metrics-before @(:!metrics system))))))

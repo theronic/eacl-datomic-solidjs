@@ -521,6 +521,31 @@ button {
   white-space: nowrap;
 }
 
+.group-card__count-button {
+  appearance: none;
+  border: 0;
+  border-bottom: 1px dashed currentColor;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.group-card__count-button:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.group-card__count-button:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+.group-card__count-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .group-card__stats-separator {
   color: var(--muted);
 }
