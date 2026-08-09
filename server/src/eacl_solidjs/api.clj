@@ -130,14 +130,16 @@
         permission
         (contracts/schema-permission system resource-type (:permission body))
         cache? (contracts/cache-enabled? body)
+        count-limit (contracts/count-limit body)
         query {:subject subject
                :permission permission
                :resource/type resource-type
+               :count-limit count-limit
                :cache? cache?}]
     (run-eacl
      system request :count-resources cache?
      #(eacl/count-resources (:acl system) query)
-     #(select-keys % [:count :truncated?]))))
+     #(select-keys % [:count :limit :truncated?]))))
 
 (defn- handle-lookup-subjects
   [system request]

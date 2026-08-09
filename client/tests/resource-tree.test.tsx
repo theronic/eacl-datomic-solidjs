@@ -43,7 +43,7 @@ describe("reactive resource paging", () => {
       if (path === "/api/eacl/count-resources") {
         requestBodies.push({ path, body: JSON.parse(String(init?.body)) });
         return jsonResponse({
-          ...success({ count: 48 }),
+          ...success({ count: 48, limit: 50_000, truncated: false }),
           meta: {
             revision: "d100.c0",
             requestId: "count-request",
@@ -82,6 +82,9 @@ describe("reactive resource paging", () => {
       .toHaveTextContent("Server Page 1 server-page-1");
     expect(await within(group).findByText("1–1")).toBeInTheDocument();
     expect(within(group).getByText("48")).toBeInTheDocument();
+    expect(
+      requestBodies.find(({ path }) => path.endsWith("count-resources"))?.body,
+    ).toMatchObject({ countLimit: 50_000 });
 
     const lookupsBeforeEviction = requestBodies.filter(({ path }) =>
       path.endsWith("lookup-resources"),
@@ -147,5 +150,92 @@ describe("reactive resource paging", () => {
 
     fireEvent.click(groupButton);
     expect(within(group).queryByText("48")).not.toBeInTheDocument();
+  });
+
+  it("bounds totals at 50,000 and doubles only the clicked count until exact", async () => {
+    const countBodies: Array<Record<string, unknown>> = [];
+    let pageRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/bootstrap") return jsonResponse(success(bootstrap));
+      if (path === "/api/eacl/lookup-resources") {
+        pageRequests += 1;
+        return jsonResponse(success({
+          items: [{ type: "server", id: "server-page-1" }],
+          pageInfo: {
+            hasNextPage: false,
+            hasPreviousPage: false,
+          },
+        }));
+      }
+      if (path === "/api/eacl/count-resources") {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        countBodies.push(body);
+        const limit = Number(body.countLimit);
+        return jsonResponse(success(
+          limit < 200_000
+            ? { count: limit, limit, truncated: true }
+            : { count: 175_000, limit, truncated: false },
+        ));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    setFetchImplementation(fetchMock as typeof fetch);
+    render(() => (
+      <AppStateProvider>
+        <CachePanel />
+        <ResourceTreePanel />
+      </AppStateProvider>
+    ));
+
+    const groupButton = await screen.findByRole("button", { name: /Servers/ });
+    const group = groupButton.closest(".group-card") as HTMLElement;
+    fireEvent.click(groupButton);
+
+    const truncatedCount = await within(group).findByRole("button", {
+      name: /Count beyond 50,000 server resources/,
+    });
+    expect(truncatedCount).toHaveTextContent("50k+");
+    expect(countBodies).toEqual([
+      expect.objectContaining({ countLimit: 50_000, cache: true }),
+    ]);
+    const pagesBeforeDoubling = pageRequests;
+
+    fireEvent.click(truncatedCount);
+    const doubledCount = await within(group).findByRole("button", {
+      name: /Count beyond 100,000 server resources/,
+    });
+    expect(doubledCount).toHaveTextContent("100k+");
+    expect(countBodies).toEqual([
+      expect.objectContaining({ countLimit: 50_000, cache: true }),
+      expect.objectContaining({ countLimit: 100_000, cache: true }),
+    ]);
+    expect(pageRequests).toBe(pagesBeforeDoubling);
+
+    fireEvent.click(doubledCount);
+    expect(await within(group).findByText("175,000")).toBeInTheDocument();
+    expect(countBodies).toEqual([
+      expect.objectContaining({ countLimit: 50_000, cache: true }),
+      expect.objectContaining({ countLimit: 100_000, cache: true }),
+      expect.objectContaining({ countLimit: 200_000, cache: true }),
+    ]);
+    expect(pageRequests).toBe(pagesBeforeDoubling);
+    expect(within(group).queryByRole("button", {
+      name: /Count beyond/,
+    })).not.toBeInTheDocument();
+
+    const cacheSwitch = screen.getByRole("switch", { name: /Cache Enabled/ });
+    fireEvent.click(cacheSwitch);
+    await waitFor(() => {
+      expect(countBodies.at(-1)).toMatchObject({ countLimit: 50_000, cache: false });
+    });
+    expect(await within(group).findByRole("button", {
+      name: /Count beyond 50,000 server resources/,
+    })).toBeInTheDocument();
+
+    fireEvent.click(cacheSwitch);
+    await waitFor(() => {
+      expect(countBodies.at(-1)).toMatchObject({ countLimit: 50_000, cache: true });
+    });
   });
 });

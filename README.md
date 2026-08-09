@@ -62,16 +62,17 @@ Ring / Reitit HTTP boundary
   └─ operation duration, bytes, cache provenance
                  │
 EACL Datomic client (managed coherence)
-  ├─ authenticated server-side pagination and exact counts
+  ├─ authenticated server-side pagination and demand-bounded counts
   ├─ schema writer and cache provider
   └─ Datomic Pro peer connection
 ```
 
 Every authorization query is server-owned. The client never downloads the
 complete dataset, never receives Datomic entities, and never bundles EACL,
-DataScript, Rum, or Electric. Resource pages and exact counts refetch
-independently, but each group issues exactly one count request and renders that
-total once beside its page range. EACL objects cross the HTTP boundary only as
+DataScript, Rum, or Electric. Resource pages and counts refetch independently.
+Each group starts with `countLimit: 50000`, renders a truncated result as
+`50k+`, and doubles only that limit when the user clicks the count; the final
+non-truncated response is exact. EACL objects cross the HTTP boundary only as
 `{ "type": ..., "id": ... }`; readable names are derived locally by SolidJS.
 Relationship children load only when expanded. Schema graph D3 code is a lazy
 chunk. Hashed JS/CSS assets are pre-gzipped and served immutable.
@@ -165,7 +166,7 @@ Main routes:
 | `GET` | `/api/health`, `/api/bootstrap` | Readiness and bounded initial metadata |
 | `GET` | `/api/subjects?offset=0&limit=20` | Deterministic known-user page |
 | `POST` | `/api/eacl/lookup-resources` | Authorized resource page with opaque `after` cursor |
-| `POST` | `/api/eacl/count-resources` | Independent exact authorized count |
+| `POST` | `/api/eacl/count-resources` | Independent demand-bounded authorized count |
 | `POST` | `/api/eacl/lookup-subjects` | Permission holders for one resource |
 | `POST` | `/api/eacl/read-relationships` | Bounded child traversal, optionally authorization-filtered |
 | `POST` | `/api/eacl/check-permission` | Authoritative allowed/denied decision |
@@ -192,6 +193,21 @@ Supported page sizes are `10`, `20`, `50`, `100`, `250`, `500`, and `1000`;
 the default is `20`. Invalid input is `400`, stale/mismatched opaque cursors
 are `409`, invalid Spice source is `422`, and unexpected details are hidden
 behind a generic `500`.
+
+Count requests require a positive `countLimit`. The Explorer sends `50000`
+initially and doubles it only when the user clicks a truncated `N+` total:
+
+```bash
+curl -s http://127.0.0.1:8088/api/eacl/count-resources \
+  -H 'content-type: application/json' \
+  -d '{
+    "subject":{"type":"user","id":"super-user"},
+    "resourceType":"server",
+    "permission":"view",
+    "countLimit":50000,
+    "cache":true
+  }'
+```
 
 ## Configuration
 

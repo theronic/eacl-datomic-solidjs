@@ -16,7 +16,8 @@
                            (assoc support/lookup-resources-body :after cursor))
           count-response
           (support/request handler :post "/api/eacl/count-resources"
-                           (dissoc support/lookup-resources-body :pageSize))
+                           (assoc (dissoc support/lookup-resources-body :pageSize)
+                                  :countLimit 50000))
           subjects
           (support/request handler :post "/api/eacl/lookup-subjects"
                            {:resource support/server-0
@@ -51,6 +52,8 @@
       (is (not= (mapv :id (:items first-data))
                 (mapv :id (:items (support/data second-page)))))
       (is (= 48 (get-in (support/data count-response) [:count])))
+      (is (= 50000 (get-in (support/data count-response) [:limit])))
+      (is (false? (get-in (support/data count-response) [:truncated])))
       (is (= 200 (:status subjects)))
       (is (seq (:items (support/data subjects))))
       (is (not (re-find #"displayName" (:body subjects))))

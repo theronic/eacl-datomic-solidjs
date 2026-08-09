@@ -143,6 +143,17 @@
                   {:supported data/page-size-options}))
      value)))
 
+(defn count-limit
+  [body]
+  (let [value (:countLimit body)]
+    (when-not (and (integer? value)
+                   (pos? value)
+                   (<= value Long/MAX_VALUE))
+      (api-error 400 "invalid-count-limit"
+                 "countLimit must be a positive whole number."
+                 {:field "countLimit"}))
+    (long value)))
+
 (defn query-long
   [request key fallback]
   (let [raw (get-in request [:query-params (name key)])]
