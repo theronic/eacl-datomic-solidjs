@@ -198,6 +198,8 @@ It is deliberately not the operator's `ubuntu` account and has no general
   environment, or AWS configuration;
 - is blocked by UID-specific firewall policy from EC2 Instance Metadata, so it
   cannot obtain instance-role credentials;
+- is blocked from the loopback nREPL port over IPv4 and IPv6, while operator
+  access to nREPL remains available;
 - has SSH forwarding disabled;
 - may run only `sudo /usr/local/sbin/eacl-memory-report`, a root-owned fixed
   diagnostic that reports cgroup/JVM memory, `/proc` memory summaries, host
