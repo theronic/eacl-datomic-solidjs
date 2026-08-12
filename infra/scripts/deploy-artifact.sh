@@ -25,7 +25,8 @@ sudo ln -sfn "releases/$sha.jar" /opt/eacl-datahike-demo/current
 sudo systemctl enable eacl-datahike-demo
 sudo systemctl restart eacl-datahike-demo
 for attempt in $(seq 1 300); do
-  if curl --fail --silent http://127.0.0.1:8088/api/health >/dev/null; then
+  if curl --connect-timeout 1 --max-time 2 --fail --silent \
+    http://127.0.0.1:8088/api/health >/dev/null; then
     exit 0
   fi
   if [ "$attempt" -eq 300 ]; then
