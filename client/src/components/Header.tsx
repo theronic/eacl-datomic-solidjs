@@ -1,15 +1,19 @@
-import { createSignal, For, Show, type JSX } from "solid-js";
-import { apiRequest } from "../api";
+import { createSignal, For, onCleanup, Show, type JSX } from "solid-js";
+import { LatestRequest } from "../api";
 import { useAppState } from "../state";
 import { PAGE_SIZE_OPTIONS, type PageSize, type SeedProgress } from "../types";
 import { ErrorBlock } from "./Common";
 
 export function Header(): JSX.Element {
   const app = useAppState();
+  const seedRequest = new LatestRequest();
   const [seedSize, setSeedSize] = createSignal("10000");
   const [seedError, setSeedError] = createSignal<unknown>();
-  const ready = () => !app.bootstrap.error && Boolean(app.bootstrap());
-  const serverTotal = () => (ready() ? (app.bootstrap()?.data.totals.servers ?? 0) : 0);
+  const bootstrap = () =>
+    app.bootstrap.loading || app.bootstrap.error ? undefined : app.bootstrap();
+  const ready = () =>
+    !app.bootstrap.loading && !app.bootstrap.error && Boolean(app.bootstrap());
+  const serverTotal = () => (ready() ? (bootstrap()?.data.totals.servers ?? 0) : 0);
 
   const seed = async (event: SubmitEvent) => {
     event.preventDefault();
@@ -25,16 +29,15 @@ export function Header(): JSX.Element {
       serversCompleted: 0,
       serversTarget: value,
       totalServers: serverTotal(),
-      label: "Preparing Datomic transactions",
+      label: "Preparing Datahike transactions",
     });
     try {
-      const result = await apiRequest<SeedProgress>("/api/seed", {
+      const result = await seedRequest.run<SeedProgress>("/api/seed", {
         method: "POST",
         body: JSON.stringify({ serverCount: value }),
       });
       app.setSeedProgress(result.data);
     } catch (error) {
-      setSeedError(error);
       app.setSeedProgress({
         status: "error",
         serversAdded: 0,
@@ -46,10 +49,12 @@ export function Header(): JSX.Element {
     }
   };
 
+  onCleanup(() => seedRequest.abort());
+
   return (
     <header class="app-header">
       <div class="app-header__intro">
-        <p class="eyebrow">EACL v8 + Datomic Pro + SolidJS</p>
+        <p class="eyebrow">EACL v8 + Datahike + SolidJS</p>
         <h1 class="app-title">🦅 EACL Explorer</h1>
         <p class="app-subtitle">
           Reactive authorization over explicit, inspectable HTTP queries.
@@ -60,22 +65,38 @@ export function Header(): JSX.Element {
           <a class="app-header__link" href="https://github.com/theronic/eacl">
             EACL Source
           </a>
-          <a class="app-header__link" href="https://github.com/theronic/eacl-solidjs">
+          <a class="app-header__link" href="https://github.com/theronic/eacl-datomic-solidjs">
             SolidJS Source
           </a>
         </nav>
         <div class="app-header__controls">
           <div class="stat-pill" aria-live="polite">
             <span class="stat-pill__label">
-              {app.bootstrap.error ? "unavailable" : app.seeding() ? "seeding" : "ready"}
+              {app.bootstrap.loading
+                ? "loading"
+                : app.bootstrap.error
+                  ? "unavailable"
+                  : app.seeding()
+                    ? "seeding"
+                    : "ready"}
             </span>
             <strong>
               <Show
-                when={app.seeding()}
-                fallback={`${serverTotal()} servers`}
+                when={!app.bootstrap.loading}
+                fallback="Refreshing explorer…"
               >
-                {app.seedProgress()?.serversCompleted ?? 0} /{" "}
-                {app.seedProgress()?.serversTarget ?? 0} servers
+                <Show
+                  when={!app.bootstrap.error}
+                  fallback="Server total unavailable"
+                >
+                  <Show
+                    when={app.seeding()}
+                    fallback={`${serverTotal()} servers`}
+                  >
+                    {app.seedProgress()?.serversCompleted ?? 0} /{" "}
+                    {app.seedProgress()?.serversTarget ?? 0} servers
+                  </Show>
+                </Show>
               </Show>
             </strong>
           </div>
@@ -84,6 +105,7 @@ export function Header(): JSX.Element {
             <select
               class="page-size-control__select"
               aria-label="Page size"
+              disabled={!ready()}
               value={String(app.pageSize())}
               onChange={(event) =>
                 app.setPageSize(Number(event.currentTarget.value) as PageSize)
@@ -94,7 +116,8 @@ export function Header(): JSX.Element {
               </For>
             </select>
           </label>
-          <form class="seed-controls" aria-busy={app.seeding()} onSubmit={seed}>
+          <Show when={bootstrap()?.data.capabilities.seedWrite}>
+            <form class="seed-controls" aria-busy={app.seeding()} onSubmit={seed}>
             <input
               class="seed-input"
               aria-label="Servers to seed"
@@ -112,7 +135,8 @@ export function Header(): JSX.Element {
             >
               {app.seeding() ? "Seeding…" : "Seed DB"}
             </button>
-          </form>
+            </form>
+          </Show>
           <button
             class="graph-toggle"
             type="button"

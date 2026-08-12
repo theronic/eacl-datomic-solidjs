@@ -2,6 +2,7 @@
 .idea/
 *.iml
 .env
+infra/deployment.env
 .cpcache/
 .clj-kondo/.cache/
 /node_modules/

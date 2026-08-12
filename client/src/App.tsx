@@ -18,7 +18,7 @@ function SeedProgress(): JSX.Element {
   return (
     <section class="seed-progress-banner" aria-live="polite">
       <div class="seed-progress-banner__copy">
-        <strong>Seeding Datomic Pro</strong>
+        <strong>Seeding Datahike</strong>
         <span>
           {progress()?.serversCompleted ?? 0} / {progress()?.serversTarget ?? 0} servers
         </span>
@@ -51,12 +51,25 @@ export function App(): JSX.Element {
       </Show>
       <Show when={app.bootstrap.error}>
         <main class="loading-grid">
-          <ErrorBlock error={app.bootstrap.error} retry={app.refetchBootstrap} />
+          <ErrorBlock
+            label="Explorer bootstrap failed"
+            error={app.bootstrap.error}
+            retry={app.refetchBootstrap}
+          />
         </main>
       </Show>
-      <Show when={!app.bootstrap.error && app.bootstrap()}>
+      <Show when={!app.bootstrap.loading && !app.bootstrap.error && app.bootstrap()}>
         <Show when={app.seeding()}>
           <SeedProgress />
+        </Show>
+        <Show when={app.seedProgress()?.status === "error"}>
+          <section class="request-error-banner">
+            <ErrorBlock
+              label="Seed status request failed"
+              error={app.seedProgress()?.error ?? "Seed status is unavailable."}
+              retry={app.retrySeedPoll}
+            />
+          </section>
         </Show>
         <SchemaPanel />
         <CachePanel />
@@ -74,7 +87,7 @@ export function App(): JSX.Element {
       </Show>
       <footer class="app-footer">
         <p class="app-footer__copy">
-          EACL authorization runs on Datomic Pro; SolidJS receives only bounded HTTP
+          EACL authorization runs on Datahike; SolidJS receives only bounded HTTP
           results.
         </p>
         <Show when={!app.permission()}>

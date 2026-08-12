@@ -43,6 +43,9 @@ export function SubjectsPanel(): JSX.Element {
   );
   onCleanup(() => request.abort());
 
+  const settledSubjects = () =>
+    subjects.loading || subjects.error ? undefined : subjects();
+
   const permissions = createMemo(() => {
     const byType = app.bootstrap()?.data.schema.permissionsByType ?? {};
     return [...new Set(Object.values(byType).flat())].sort();
@@ -106,18 +109,30 @@ export function SubjectsPanel(): JSX.Element {
           <p id="known-subject-heading" class="panel-label">
             Known users
           </p>
-          <Show when={subjects()?.data.pageInfo.total !== undefined}>
-            <span class="section-meta">{subjects()?.data.pageInfo.total} total</span>
+          <Show when={settledSubjects()?.data.pageInfo.total !== undefined}>
+            <span class="section-meta">
+              {settledSubjects()?.data.pageInfo.total} total
+            </span>
           </Show>
         </div>
 
-        <Show when={subjects.loading && !subjects()}>
-          <LoadingBlock label="subjects" />
+        <Show when={subjects.loading}>
+          <LoadingBlock label={`subjects page ${page()}`} />
         </Show>
         <Show when={subjects.error}>
-          <ErrorBlock error={subjects.error} retry={() => void refetch()} />
+          <ErrorBlock
+            label={`Subjects page ${page()} failed`}
+            error={subjects.error}
+            retry={() => void refetch()}
+            secondary={offset() > 0
+              ? {
+                  label: "Previous page",
+                  action: () => setOffset(Math.max(0, offset() - app.pageSize())),
+                }
+              : undefined}
+          />
         </Show>
-        <Show when={subjects()}>
+        <Show when={settledSubjects()}>
           {(envelope: () => ApiSuccess<KnownSubjectPage>) => (
             <>
               <Pagination
@@ -130,7 +145,7 @@ export function SubjectsPanel(): JSX.Element {
                   setOffset(envelope().data.pageInfo.nextOffset ?? offset())
                 }
               />
-              <div class="list-stack" aria-busy={subjects.loading}>
+              <div class="list-stack">
                 <For
                   each={envelope().data.data}
                   fallback={<EmptyState>No users on this page.</EmptyState>}

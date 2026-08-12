@@ -521,6 +521,31 @@ button {
   white-space: nowrap;
 }
 
+.group-card__count-button {
+  appearance: none;
+  border: 0;
+  border-bottom: 1px dashed currentColor;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.group-card__count-button:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.group-card__count-button:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+.group-card__count-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .group-card__stats-separator {
   color: var(--muted);
 }
@@ -561,6 +586,33 @@ button {
 .tree-meta__error,
 .error-block {
   color: #9b2f16;
+}
+
+.error-block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgba(155, 47, 22, 0.24);
+  background: rgba(190, 62, 34, 0.09);
+}
+
+.error-block__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.error-block__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.request-error-banner {
+  margin-top: 18px;
 }
 
 .list-stack,
@@ -1111,8 +1163,32 @@ button {
   align-items: center;
   gap: 8px;
   min-height: 46px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+  background: var(--summary);
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.inline-loading,
+.inline-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.inline-loading {
+  color: var(--muted);
+}
+
+.inline-error {
+  color: #9b2f16;
+  font-weight: 600;
 }
 
 .loading-dot {
@@ -1131,7 +1207,6 @@ button {
 }
 
 .retry-button {
-  margin-left: auto;
   border: 1px solid currentColor;
   border-radius: 999px;
   background: transparent;
@@ -1139,6 +1214,14 @@ button {
   cursor: pointer;
   font: inherit;
   padding: 3px 9px;
+}
+
+.cache-switch__input:disabled {
+  cursor: wait;
+}
+
+.cache-switch__input:disabled + .cache-switch__slider {
+  opacity: 0.55;
 }
 
 .loading-grid {

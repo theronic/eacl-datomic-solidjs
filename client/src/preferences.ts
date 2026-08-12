@@ -5,7 +5,7 @@ import {
   type Theme,
 } from "./types";
 
-const STORAGE_KEY = "eacl-solidjs.preferences.v1";
+const STORAGE_KEY = "eacl-datahike-demo.preferences.v1";
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   subjectId: "super-user",

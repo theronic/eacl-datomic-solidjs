@@ -24,6 +24,8 @@ import {
   DisclosureButton,
   EmptyState,
   ErrorBlock,
+  InlineError,
+  InlineLoading,
   LoadingBlock,
   MetaTiming,
   Pagination,
@@ -32,6 +34,14 @@ import {
 } from "./Common";
 
 const resourceKey = (resource: EaclObject) => `${resource.type}:${resource.id}`;
+const initialCountLimit = 50_000;
+const countFormatter = new Intl.NumberFormat("en-US");
+const compactCountFormatter = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const formatTruncatedCount = (count: number) =>
+  compactCountFormatter.format(count).toLocaleLowerCase("en-US");
 
 function PaginationTiming(props: { meta?: ApiMeta }): JSX.Element {
   return (
@@ -108,13 +118,19 @@ function RelationshipGroup(props: {
       { defer: true },
     ),
   );
-  createEffect(() => {
-    const error = relationships.error;
-    if (error instanceof ApiError && error.code === "invalid-cursor" && cursors().length) {
-      setCursors([]);
-    }
-  });
   onCleanup(() => request.abort());
+  const settledRelationships = () =>
+    relationships.loading || relationships.error ? undefined : relationships();
+  const relationshipRecovery = () => {
+    if (!cursors().length) return undefined;
+    return relationships.error instanceof ApiError &&
+      relationships.error.code === "invalid-cursor"
+      ? { label: "First page", action: () => setCursors([]) }
+      : {
+          label: "Previous page",
+          action: () => setCursors((value) => value.slice(0, -1)),
+        };
+  };
 
   return (
     <div class="relationship-group">
@@ -129,17 +145,22 @@ function RelationshipGroup(props: {
             {identifierLabel(props.path.resourceType)}s
           </span>
         </DisclosureButton>
-        <MetaTiming meta={relationships()?.meta} />
+        <MetaTiming meta={settledRelationships()?.meta} />
       </div>
       <Show when={expanded()}>
         <div id={`${key()}-content`} class="relationship-group__content">
-          <Show when={relationships.loading && !relationships()}>
-            <LoadingBlock label="relationships" />
+          <Show when={relationships.loading}>
+            <LoadingBlock label={`relationships page ${cursors().length + 1}`} />
           </Show>
           <Show when={relationships.error}>
-            <ErrorBlock error={relationships.error} retry={() => void refetch()} />
+            <ErrorBlock
+              label={`Relationships page ${cursors().length + 1} failed`}
+              error={relationships.error}
+              retry={() => void refetch()}
+              secondary={relationshipRecovery()}
+            />
           </Show>
-          <Show when={relationships()}>
+          <Show when={settledRelationships()}>
             {(envelope: () => ApiSuccess<RelationshipPage>) => (
               <>
                 <Pagination
@@ -251,7 +272,27 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   const pageRequest = new LatestRequest();
   const countRequest = new LatestRequest();
   const [cursors, setCursors] = createSignal<string[]>([]);
+  const [countDemandVersion, setCountDemandVersion] = createSignal(0);
+  let activeCountScope = "";
+  let activeCountLimit = initialCountLimit;
   const cursor = () => cursors().at(-1);
+  const countScope = () =>
+    JSON.stringify([
+      app.subjectId(),
+      app.permission(),
+      props.resourceType,
+      app.cacheEnabled(),
+      app.mutationRevision(),
+    ]);
+  const countLimit = () => {
+    countDemandVersion();
+    const scope = countScope();
+    if (scope !== activeCountScope) {
+      activeCountScope = scope;
+      activeCountLimit = initialCountLimit;
+    }
+    return activeCountLimit;
+  };
   const base = () =>
     expanded() && app.permission()
       ? ([
@@ -266,6 +307,10 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
     const value = base();
     return value ? ([...value, app.pageSize(), cursor() ?? ""] as const) : false;
   };
+  const countSource = () => {
+    const value = base();
+    return value ? ([...value, countLimit()] as const) : false;
+  };
   const [page, { refetch: refetchPage }] = createResource(pageSource, (input) =>
     pageRequest.run<ObjectPage>("/api/eacl/lookup-resources", {
       method: "POST",
@@ -279,7 +324,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
       }),
     }),
   );
-  const [count, { refetch: refetchCount }] = createResource(base, (input) =>
+  const [count, { refetch: refetchCount }] = createResource(countSource, (input) =>
     countRequest.run<ResourceCount>("/api/eacl/count-resources", {
       method: "POST",
       body: JSON.stringify({
@@ -287,9 +332,22 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
         permission: input[1],
         resourceType: input[2],
         cache: input[3],
+        countLimit: input[5],
       }),
     }),
   );
+
+  const doubleCountLimit = () => {
+    const result = count()?.data;
+    if (!result?.truncated || count.loading) return;
+    const currentLimit = Math.max(countLimit(), result.limit);
+    const nextLimit = Math.min(Number.MAX_SAFE_INTEGER, currentLimit * 2);
+    if (nextLimit > currentLimit) {
+      activeCountScope = countScope();
+      activeCountLimit = nextLimit;
+      setCountDemandVersion((version) => version + 1);
+    }
+  };
 
   createEffect(
     on(
@@ -304,18 +362,23 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
       { defer: true },
     ),
   );
-  createEffect(() => {
-    const error = page.error;
-    if (error instanceof ApiError && error.code === "invalid-cursor" && cursors().length) {
-      setCursors([]);
-    }
-  });
   onCleanup(() => {
     pageRequest.abort();
     countRequest.abort();
   });
 
-  const itemCount = () => page()?.data.items.length ?? 0;
+  const settledPage = () => page.loading || page.error ? undefined : page();
+  const settledCount = () => count.loading || count.error ? undefined : count();
+  const pageRecovery = () => {
+    if (!cursors().length) return undefined;
+    return page.error instanceof ApiError && page.error.code === "invalid-cursor"
+      ? { label: "First page", action: () => setCursors([]) }
+      : {
+          label: "Previous page",
+          action: () => setCursors((value) => value.slice(0, -1)),
+        };
+  };
+  const itemCount = () => settledPage()?.data.items.length ?? 0;
   const rangeStart = () => (itemCount() ? cursors().length * app.pageSize() + 1 : 0);
   const rangeEnd = () => cursors().length * app.pageSize() + itemCount();
 
@@ -333,18 +396,52 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
         <Show when={expanded()}>
           <div class="group-card__stats">
             <span class="group-card__page-stats">
-              <Show when={page()} fallback={<span class="section-meta">—</span>}>
-                <span class="group-card__range">
-                  {rangeStart()}–{rangeEnd()}
-                </span>
-                <PaginationTiming meta={page()?.meta} />
+              <Show
+                when={!page.loading}
+                fallback={<InlineLoading label={`Loading page ${cursors().length + 1}…`} />}
+              >
+                <Show
+                  when={!page.error}
+                  fallback={<InlineError label={`Page ${cursors().length + 1} failed`} />}
+                >
+                  <Show when={settledPage()} fallback={<span class="section-meta">—</span>}>
+                    <span class="group-card__range">
+                      {rangeStart()}–{rangeEnd()}
+                    </span>
+                    <PaginationTiming meta={settledPage()?.meta} />
+                  </Show>
+                </Show>
               </Show>
             </span>
             <span class="group-card__stats-separator">of</span>
             <span class="group-card__count-stats">
-              <Show when={count()} fallback={<span class="section-meta">—</span>}>
-                <span class="group-card__count">{count()?.data.count}</span>
-                <PaginationTiming meta={count()?.meta} />
+              <Show when={!count.loading} fallback={<InlineLoading label="Counting…" />}>
+                <Show when={!count.error} fallback={<InlineError label="Count failed" />}>
+                  <Show when={settledCount()} fallback={<span class="section-meta">—</span>}>
+                    {(envelope: () => ApiSuccess<ResourceCount>) => (
+                      <>
+                        <Show
+                          when={envelope().data.truncated}
+                          fallback={
+                            <span class="group-card__count">
+                              {countFormatter.format(envelope().data.count)}
+                            </span>
+                          }
+                        >
+                          <button
+                            type="button"
+                            class="group-card__count group-card__count-button"
+                            aria-label={`Count beyond ${countFormatter.format(envelope().data.count)} ${props.resourceType} resources`}
+                            onClick={doubleCountLimit}
+                          >
+                            {formatTruncatedCount(envelope().data.count)}+
+                          </button>
+                        </Show>
+                        <PaginationTiming meta={envelope().meta} />
+                      </>
+                    )}
+                  </Show>
+                </Show>
               </Show>
             </span>
           </div>
@@ -353,16 +450,25 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
 
       <Show when={expanded()}>
         <div id={`${groupKey()}-content`} class="group-card__content">
-          <Show when={(page.loading && !page()) || (count.loading && !count())}>
-            <LoadingBlock label={`${props.resourceType} resources`} />
+          <Show when={page.loading}>
+            <LoadingBlock label={`${props.resourceType} page ${cursors().length + 1}`} />
           </Show>
           <Show when={page.error}>
-            <ErrorBlock error={page.error} retry={() => void refetchPage()} />
+            <ErrorBlock
+              label={`${identifierLabel(props.resourceType)} page ${cursors().length + 1} failed`}
+              error={page.error}
+              retry={() => void refetchPage()}
+              secondary={pageRecovery()}
+            />
           </Show>
           <Show when={count.error}>
-            <ErrorBlock error={count.error} retry={() => void refetchCount()} />
+            <ErrorBlock
+              label={`${identifierLabel(props.resourceType)} count failed`}
+              error={count.error}
+              retry={() => void refetchCount()}
+            />
           </Show>
-          <Show when={page()}>
+          <Show when={settledPage()}>
             {(envelope: () => ApiSuccess<ObjectPage>) => (
               <>
                 <Pagination

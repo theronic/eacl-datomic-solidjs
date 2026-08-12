@@ -63,16 +63,17 @@ export function Pagination(props: {
   page: number;
   canPrevious: boolean;
   canNext: boolean;
+  busy?: boolean;
   first: () => void;
   previous: () => void;
   next: () => void;
 }): JSX.Element {
   return (
-    <div class="pagination-controls" aria-label="Pagination">
+    <div class="pagination-controls" aria-label="Pagination" aria-busy={props.busy}>
       <button
         type="button"
         class="pagination-button"
-        disabled={!props.canPrevious}
+        disabled={props.busy || !props.canPrevious}
         onClick={() => props.first()}
       >
         First
@@ -80,7 +81,7 @@ export function Pagination(props: {
       <button
         type="button"
         class="pagination-button"
-        disabled={!props.canPrevious}
+        disabled={props.busy || !props.canPrevious}
         onClick={() => props.previous()}
       >
         Previous
@@ -89,7 +90,7 @@ export function Pagination(props: {
       <button
         type="button"
         class="pagination-button"
-        disabled={!props.canNext}
+        disabled={props.busy || !props.canNext}
         onClick={() => props.next()}
       >
         Next
@@ -100,19 +101,54 @@ export function Pagination(props: {
 
 export function ErrorBlock(props: {
   error: unknown;
+  label?: string;
   retry?: () => void;
+  secondary?: { label: string; action: () => void };
 }): JSX.Element {
   const message = () =>
     props.error instanceof Error ? props.error.message : String(props.error);
   return (
     <div class="error-block" role="alert">
-      <span>{message()}</span>
-      <Show when={props.retry}>
-        <button type="button" class="retry-button" onClick={() => props.retry?.()}>
-          Retry
-        </button>
-      </Show>
+      <div class="error-block__copy">
+        <strong>{props.label ?? "Request failed"}</strong>
+        <span>{message()}</span>
+      </div>
+      <div class="error-block__actions">
+        <Show when={props.secondary}>
+          {(secondary) => (
+            <button
+              type="button"
+              class="retry-button"
+              onClick={() => secondary().action()}
+            >
+              {secondary().label}
+            </button>
+          )}
+        </Show>
+        <Show when={props.retry}>
+          <button type="button" class="retry-button" onClick={() => props.retry?.()}>
+            Retry
+          </button>
+        </Show>
+      </div>
     </div>
+  );
+}
+
+export function InlineLoading(props: { label: string }): JSX.Element {
+  return (
+    <span class="inline-loading" role="status" aria-live="polite">
+      <span class="loading-dot" aria-hidden="true" />
+      {props.label}
+    </span>
+  );
+}
+
+export function InlineError(props: { label: string }): JSX.Element {
+  return (
+    <span class="inline-error" role="alert">
+      {props.label}
+    </span>
   );
 }
 

@@ -7,6 +7,10 @@ import { bootstrap, jsonResponse, success } from "./fixtures";
 describe("subjects and permissions", () => {
   it("reactively switches quick subjects and schema-derived permissions", async () => {
     const subjectRequests: string[] = [];
+    let releaseSecondPage: () => void = () => undefined;
+    const secondPageGate = new Promise<void>((resolve) => {
+      releaseSecondPage = resolve;
+    });
     const model = {
       ...bootstrap,
       schema: {
@@ -21,6 +25,7 @@ describe("subjects and permissions", () => {
         if (path.startsWith("/api/subjects?")) {
           subjectRequests.push(path);
           const offset = Number(new URL(path, "http://example.test").searchParams.get("offset"));
+          if (offset) await secondPageGate;
           return jsonResponse(success({
             data: [{ type: "user", id: offset ? "user-2" : "user-1" }],
             pageInfo: {
@@ -49,6 +54,10 @@ describe("subjects and permissions", () => {
     expect(screen.getByText("User 1", { selector: ".resource-caption__name" }).parentElement)
       .toHaveTextContent("User 1 user-1");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("Loading subjects page 2…")).toBeInTheDocument();
+    expect(screen.queryByText("user-1", { selector: ".resource-caption__id" }))
+      .not.toBeInTheDocument();
+    releaseSecondPage();
     await screen.findByText("Page 2");
     const requestsBeforeSelection = subjectRequests.length;
     fireEvent.click(screen.getAllByRole("button", { name: /User 1/ })[0]);

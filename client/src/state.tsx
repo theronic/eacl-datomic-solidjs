@@ -11,7 +11,7 @@ import {
   type ParentComponent,
   type Resource,
 } from "solid-js";
-import { apiRequest, LatestRequest } from "./api";
+import { LatestRequest } from "./api";
 import { readPreferences, writePreferences } from "./preferences";
 import type {
   ApiSuccess,
@@ -42,6 +42,7 @@ interface AppStateValue {
   queryGeneration: Accessor<number>;
   seedProgress: Accessor<SeedProgress | undefined>;
   setSeedProgress: (value: SeedProgress | undefined) => void;
+  retrySeedPoll: () => void;
   seeding: Accessor<boolean>;
   expanded: Accessor<ReadonlySet<string>>;
   toggleExpanded: (key: string) => void;
@@ -53,6 +54,7 @@ const AppState = createContext<AppStateValue>();
 export const AppStateProvider: ParentComponent = (props) => {
   const preferences = readPreferences();
   const bootstrapRequest = new LatestRequest();
+  const seedPollRequest = new LatestRequest();
   const [bootstrap, { refetch: refetchBootstrapResource }] = createResource(
     () => true,
     () => bootstrapRequest.run<Bootstrap>("/api/bootstrap"),
@@ -70,6 +72,16 @@ export const AppStateProvider: ParentComponent = (props) => {
     new Set(preferences.expanded),
   );
   const seeding = createMemo(() => seedProgress()?.status === "seeding");
+  const retrySeedPoll = () => {
+    const current = seedProgress();
+    if (!current || current.status !== "error") return;
+    setSeedProgress({
+      ...current,
+      status: "seeding",
+      error: null,
+      label: "Reconnecting to seed status",
+    });
+  };
 
   const invalidateQueries = () => setQueryGeneration((value) => value + 1);
   const setSubjectId = (value: string) => {
@@ -103,7 +115,11 @@ export const AppStateProvider: ParentComponent = (props) => {
 
   createEffect(
     on(
-      () => bootstrap(),
+      // Reading a failed Solid resource accessor rethrows its error, and a
+      // refreshing resource retains its previous value. Observe state first
+      // so neither failure nor stale bootstrap data escapes into application
+      // synchronization.
+      () => (bootstrap.loading || bootstrap.error ? undefined : bootstrap()),
       (envelope) => {
         if (!envelope) return;
         if (!mutationRevision()) setMutationRevision(envelope.meta.revision);
@@ -151,15 +167,18 @@ export const AppStateProvider: ParentComponent = (props) => {
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const result = await apiRequest<SeedProgress>("/api/seed");
+        const result = await seedPollRequest.run<SeedProgress>("/api/seed");
         if (!active) return;
         setSeedProgress(result.data);
-        if (result.meta.revision !== mutationRevision()) {
-          applyMutationRevision(result.meta.revision);
-        }
         if (result.data.status === "seeding") {
-          timer = window.setTimeout(poll, 250);
+          // Each Datahike transaction advances the database revision. Keep
+          // already-open EACL pages pinned while the batch is moving instead
+          // of aborting and restarting them on every progress poll.
+          timer = window.setTimeout(poll, 1000);
         } else {
+          if (result.meta.revision !== mutationRevision()) {
+            applyMutationRevision(result.meta.revision);
+          }
           void refetchBootstrapResource();
         }
       } catch (error) {
@@ -179,10 +198,14 @@ export const AppStateProvider: ParentComponent = (props) => {
     onCleanup(() => {
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
+      seedPollRequest.abort();
     });
   });
 
-  onCleanup(() => bootstrapRequest.abort());
+  onCleanup(() => {
+    bootstrapRequest.abort();
+    seedPollRequest.abort();
+  });
 
   const value: AppStateValue = {
     bootstrap,
@@ -204,6 +227,7 @@ export const AppStateProvider: ParentComponent = (props) => {
     queryGeneration,
     seedProgress,
     setSeedProgress,
+    retrySeedPoll,
     seeding,
     expanded,
     toggleExpanded,

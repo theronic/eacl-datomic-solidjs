@@ -66,27 +66,37 @@ function PermissionSubjects(props: {
       { defer: true },
     ),
   );
-  createEffect(() => {
-    const error = subjects.error;
-    if (error instanceof ApiError && error.code === "invalid-cursor" && cursors().length) {
-      setCursors([]);
-    }
-  });
   onCleanup(() => request.abort());
+  const settledSubjects = () =>
+    subjects.loading || subjects.error ? undefined : subjects();
+  const subjectRecovery = () => {
+    if (!cursors().length) return undefined;
+    return subjects.error instanceof ApiError && subjects.error.code === "invalid-cursor"
+      ? { label: "First page", action: () => setCursors([]) }
+      : {
+          label: "Previous page",
+          action: () => setCursors((value) => value.slice(0, -1)),
+        };
+  };
 
   return (
     <section class="panel-section permission-subjects">
       <div class="section-header">
         <p class="panel-label">:{props.permission}</p>
-        <MetaTiming meta={subjects()?.meta} />
+        <MetaTiming meta={settledSubjects()?.meta} />
       </div>
-      <Show when={subjects.loading && !subjects()}>
-        <LoadingBlock label="permission holders" />
+      <Show when={subjects.loading}>
+        <LoadingBlock label={`permission holders page ${cursors().length + 1}`} />
       </Show>
       <Show when={subjects.error}>
-        <ErrorBlock error={subjects.error} retry={() => void refetch()} />
+        <ErrorBlock
+          label={`Permission holders page ${cursors().length + 1} failed`}
+          error={subjects.error}
+          retry={() => void refetch()}
+          secondary={subjectRecovery()}
+        />
       </Show>
-      <Show when={subjects()}>
+      <Show when={settledSubjects()}>
         {(envelope: () => ApiSuccess<ObjectPage>) => (
           <>
             <Pagination

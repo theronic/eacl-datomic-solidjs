@@ -1,8 +1,14 @@
-import { createSignal, Show, type JSX } from "solid-js";
-import { apiRequest } from "../api";
+import { createSignal, onCleanup, Show, type JSX } from "solid-js";
+import { LatestRequest } from "../api";
 import { useAppState } from "../state";
 import type { CacheSnapshot } from "../types";
-import { DisclosureButton, ErrorBlock } from "./Common";
+import {
+  DisclosureButton,
+  ErrorBlock,
+  InlineError,
+  InlineLoading,
+  LoadingBlock,
+} from "./Common";
 
 interface CapturedSnapshot {
   capturedAt: string;
@@ -11,6 +17,8 @@ interface CapturedSnapshot {
 }
 export function CachePanel(): JSX.Element {
   const app = useAppState();
+  const refreshRequest = new LatestRequest();
+  const evictRequest = new LatestRequest();
   const expansionKey = "segment:cache";
   const expanded = () => app.isExpanded(expansionKey);
   const [snapshot, setSnapshot] = createSignal<CapturedSnapshot>();
@@ -22,8 +30,9 @@ export function CachePanel(): JSX.Element {
   const refreshCache = async () => {
     setRefreshing(true);
     setRefreshError(undefined);
+    setEvictError(undefined);
     try {
-      const result = await apiRequest<CacheSnapshot>("/api/cache");
+      const result = await refreshRequest.run<CacheSnapshot>("/api/cache");
       setSnapshot({
         capturedAt: result.data.capturedAt,
         cacheEnabled: app.cacheEnabled(),
@@ -39,11 +48,13 @@ export function CachePanel(): JSX.Element {
   const evictCache = async () => {
     setEvicting(true);
     setEvictError(undefined);
+    setRefreshError(undefined);
     try {
-      const result = await apiRequest<{ status: string }>("/api/cache/evict", {
+      const result = await evictRequest.run<{ status: string }>("/api/cache/evict", {
         method: "POST",
         body: "{}",
       });
+      setSnapshot(undefined);
       app.applyMutationRevision(result.meta.revision);
     } catch (error) {
       setEvictError(error);
@@ -51,6 +62,11 @@ export function CachePanel(): JSX.Element {
       setEvicting(false);
     }
   };
+
+  onCleanup(() => {
+    refreshRequest.abort();
+    evictRequest.abort();
+  });
 
   const prettySnapshot = () => JSON.stringify(snapshot(), null, 2);
 
@@ -66,6 +82,18 @@ export function CachePanel(): JSX.Element {
             <span class="group-card__title">Cache</span>
           </DisclosureButton>
           <div class="cache-controls">
+            <Show when={!expanded() && refreshing()}>
+              <InlineLoading label="Loading cache metrics…" />
+            </Show>
+            <Show when={!expanded() && evicting()}>
+              <InlineLoading label="Evicting cache…" />
+            </Show>
+            <Show when={!expanded() && refreshError()}>
+              <InlineError label="Cache refresh failed" />
+            </Show>
+            <Show when={!expanded() && evictError()}>
+              <InlineError label="Cache eviction failed" />
+            </Show>
             <label class="cache-toggle">
               <span class="cache-toggle__label">Cache Enabled:</span>
               <span class="cache-switch">
@@ -73,6 +101,7 @@ export function CachePanel(): JSX.Element {
                   class="cache-switch__input"
                   type="checkbox"
                   role="switch"
+                  disabled={refreshing() || evicting()}
                   checked={app.cacheEnabled()}
                   aria-checked={app.cacheEnabled()}
                   onChange={(event) => app.setCacheEnabled(event.currentTarget.checked)}
@@ -81,18 +110,20 @@ export function CachePanel(): JSX.Element {
               </span>
               <span class="cache-toggle__state">{app.cacheEnabled() ? "On" : "Off"}</span>
             </label>
-            <button
-              type="button"
-              class="pagination-button cache-evict"
-              disabled={evicting()}
-              onClick={() => void evictCache()}
-            >
-              {evicting() ? "Evicting…" : "Evict Cache"}
-            </button>
+            <Show when={app.bootstrap()?.data.capabilities.cacheEvict}>
+              <button
+                type="button"
+                class="pagination-button cache-evict"
+                disabled={evicting() || refreshing()}
+                onClick={() => void evictCache()}
+              >
+                {evicting() ? "Evicting…" : "Evict Cache"}
+              </button>
+            </Show>
             <button
               type="button"
               class="pagination-button cache-refresh"
-              disabled={refreshing()}
+              disabled={refreshing() || evicting()}
               onClick={() => void refreshCache()}
             >
               {refreshing() ? "Refreshing…" : "Refresh cache"}
@@ -101,23 +132,47 @@ export function CachePanel(): JSX.Element {
         </div>
         <Show when={expanded()}>
           <div id="cache-segment-content" class="cache-metrics">
-            <Show when={evictError()}>{(error) => <ErrorBlock error={error()} />}</Show>
-            <Show when={refreshError()}>{(error) => <ErrorBlock error={error()} />}</Show>
-            <Show
-              when={snapshot()}
-              fallback={
-                <p class="empty-state">
-                  Cache metrics have not been captured. Click Refresh cache.
+            <Show when={evicting()}>
+              <LoadingBlock label="cache eviction" />
+            </Show>
+            <Show when={refreshing()}>
+              <LoadingBlock label="cache metrics" />
+            </Show>
+            <Show when={evictError()}>
+              {(error) => (
+                <ErrorBlock
+                  label="Cache eviction failed"
+                  error={error()}
+                  retry={() => void evictCache()}
+                />
+              )}
+            </Show>
+            <Show when={refreshError()}>
+              {(error) => (
+                <ErrorBlock
+                  label="Cache refresh failed"
+                  error={error()}
+                  retry={() => void refreshCache()}
+                />
+              )}
+            </Show>
+            <Show when={!evicting() && !refreshing() && !evictError() && !refreshError()}>
+              <Show
+                when={snapshot()}
+                fallback={
+                  <p class="empty-state">
+                    Cache metrics have not been captured. Click Refresh cache.
+                  </p>
+                }
+              >
+                <p class="cache-snapshot-meta">
+                  Captured {new Date(snapshot()!.capturedAt).toLocaleString()} · cache{" "}
+                  {snapshot()!.cacheEnabled ? "enabled" : "disabled"}
                 </p>
-              }
-            >
-              <p class="cache-snapshot-meta">
-                Captured {new Date(snapshot()!.capturedAt).toLocaleString()} · cache{" "}
-                {snapshot()!.cacheEnabled ? "enabled" : "disabled"}
-              </p>
-              <pre class="cache-metrics__code">
-                <code>{prettySnapshot()}</code>
-              </pre>
+                <pre class="cache-metrics__code">
+                  <code>{prettySnapshot()}</code>
+                </pre>
+              </Show>
             </Show>
           </div>
         </Show>

@@ -1,0 +1,42 @@
+{$EACL_SITE_ADDRESS} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	route {
+		@root path /
+		redir @root /datahike/ 308
+
+		@missingSlash path /datahike
+		redir @missingSlash /datahike/ 308
+
+		@schemaWrite {
+			method PUT
+			path /datahike/api/schema
+		}
+		respond @schemaWrite 403
+
+		@seedWrite {
+			method POST
+			path /datahike/api/seed
+		}
+		respond @seedWrite 403
+
+		@cacheEvict {
+			method POST
+			path /datahike/api/cache/evict
+		}
+		respond @cacheEvict 403
+
+		handle_path /datahike/* {
+			reverse_proxy {$EACL_BACKEND:127.0.0.1:8088}
+		}
+
+		respond 404
+	}
+}

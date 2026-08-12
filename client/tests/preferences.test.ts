@@ -8,13 +8,13 @@ describe("local preferences", () => {
       },
     } as unknown as Storage;
     expect(readPreferences(throwing)).toEqual(DEFAULT_PREFERENCES);
-    localStorage.setItem("eacl-solidjs.preferences.v1", "not-json");
+    localStorage.setItem("eacl-datahike-demo.preferences.v1", "not-json");
     expect(readPreferences()).toEqual(DEFAULT_PREFERENCES);
   });
 
   it("normalizes unsafe stored values and persists valid settings", () => {
     localStorage.setItem(
-      "eacl-solidjs.preferences.v1",
+      "eacl-datahike-demo.preferences.v1",
       JSON.stringify({
         subjectId: "user-1",
         permission: "view",

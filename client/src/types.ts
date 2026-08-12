@@ -53,7 +53,8 @@ export interface KnownSubjectPage {
 
 export interface ResourceCount {
   count: number;
-  truncated?: boolean;
+  limit: number;
+  truncated: boolean;
 }
 
 export interface Relationship {
@@ -125,6 +126,11 @@ export interface Bootstrap {
   quickSubjects: Array<{ id: string; label: string }>;
   pageSizeOptions: PageSize[];
   defaultPageSize: PageSize;
+  capabilities: {
+    schemaWrite: boolean;
+    seedWrite: boolean;
+    cacheEvict: boolean;
+  };
 }
 
 export interface CacheSnapshot {
