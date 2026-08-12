@@ -24,9 +24,10 @@ The browser command expects both development processes to be active. The
 separate reverse-proxy contract exercises the built `/datahike/` asset base.
 
 The unreliable-backend browser scenario holds a Server Page 2 request open and
-asserts that Page 1 resources and timings disappear while the new page is
-pending. It injects HTTP 504, verifies the labeled Retry/Previous error, and
-publishes Page 2 only after a successful retry. Unit coverage includes network
+asserts that Page 1 resources, timings, page number, and controls remain visible
+while the Next button spins. It injects HTTP 504, verifies that the retained
+page remains beside the labeled Retry/Previous error, and publishes Page 2 only
+after a successful retry. Unit coverage includes network
 failure, the 35-second client deadline, cache invalidation, subject-page
 loading, pagination failure, and explicit recovery from an expired EACL cursor.
 

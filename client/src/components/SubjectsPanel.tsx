@@ -15,6 +15,7 @@ import type { ApiSuccess, KnownSubjectPage } from "../types";
 import {
   EmptyState,
   ErrorBlock,
+  InlineLoading,
   LoadingBlock,
   Pagination,
   TypeBadge,
@@ -33,6 +34,24 @@ export function SubjectsPanel(): JSX.Element {
         `/api/subjects?offset=${currentOffset}&limit=${pageSize}`,
       ),
   );
+  const [displayedSubjects, setDisplayedSubjects] =
+    createSignal<ApiSuccess<KnownSubjectPage>>();
+  const [displayedOffset, setDisplayedOffset] = createSignal(0);
+  const [displayedPageSize, setDisplayedPageSize] = createSignal(app.pageSize());
+  const [pendingAction, setPendingAction] =
+    createSignal<"first" | "previous" | "next">();
+
+  createEffect(() => {
+    if (subjects.loading || subjects.error) return;
+    const envelope = subjects();
+    if (!envelope) return;
+    setDisplayedSubjects(envelope);
+    setDisplayedOffset(offset());
+    setDisplayedPageSize(app.pageSize());
+  });
+  createEffect(() => {
+    if (!subjects.loading) setPendingAction(undefined);
+  });
 
   createEffect(
     on(
@@ -43,14 +62,33 @@ export function SubjectsPanel(): JSX.Element {
   );
   onCleanup(() => request.abort());
 
-  const settledSubjects = () =>
-    subjects.loading || subjects.error ? undefined : subjects();
+  const settledSubjects = displayedSubjects;
 
   const permissions = createMemo(() => {
-    const byType = app.bootstrap()?.data.schema.permissionsByType ?? {};
+    const byType = app.bootstrapData()?.data.schema.permissionsByType ?? {};
     return [...new Set(Object.values(byType).flat())].sort();
   });
-  const page = () => Math.floor(offset() / app.pageSize()) + 1;
+  const targetPage = () => Math.floor(offset() / app.pageSize()) + 1;
+  const displayedPage = () =>
+    Math.floor(displayedOffset() / displayedPageSize()) + 1;
+  const navigationAction = () => {
+    if (offset() > displayedOffset()) return "next" as const;
+    if (offset() === 0 && displayedOffset() > 0) return "first" as const;
+    if (offset() < displayedOffset()) return "previous" as const;
+    return undefined;
+  };
+  const navigate = (
+    action: "first" | "previous" | "next",
+    nextOffset: number,
+  ) => {
+    if (subjects.loading) return;
+    setPendingAction(action);
+    setOffset(nextOffset);
+  };
+  const retry = () => {
+    setPendingAction(navigationAction());
+    void refetch();
+  };
 
   return (
     <div class="panel-card subjects-panel">
@@ -89,7 +127,7 @@ export function SubjectsPanel(): JSX.Element {
           </p>
         </div>
         <div class="chip-row">
-          <For each={app.bootstrap()?.data.quickSubjects ?? []}>
+          <For each={app.bootstrapData()?.data.quickSubjects ?? []}>
             {(subject) => (
               <button
                 type="button"
@@ -114,20 +152,27 @@ export function SubjectsPanel(): JSX.Element {
               {settledSubjects()?.data.pageInfo.total} total
             </span>
           </Show>
+          <Show when={subjects.loading && settledSubjects()}>
+            <InlineLoading label={`Loading subjects page ${targetPage()}…`} />
+          </Show>
         </div>
 
-        <Show when={subjects.loading}>
-          <LoadingBlock label={`subjects page ${page()}`} />
+        <Show when={subjects.loading && !settledSubjects()}>
+          <LoadingBlock label={`subjects page ${targetPage()}`} />
         </Show>
         <Show when={subjects.error}>
           <ErrorBlock
-            label={`Subjects page ${page()} failed`}
+            label={`Subjects page ${targetPage()} failed`}
             error={subjects.error}
-            retry={() => void refetch()}
+            retry={retry}
             secondary={offset() > 0
               ? {
                   label: "Previous page",
-                  action: () => setOffset(Math.max(0, offset() - app.pageSize())),
+                  action: () =>
+                    navigate(
+                      "previous",
+                      Math.max(0, displayedOffset() - displayedPageSize()),
+                    ),
                 }
               : undefined}
           />
@@ -136,16 +181,26 @@ export function SubjectsPanel(): JSX.Element {
           {(envelope: () => ApiSuccess<KnownSubjectPage>) => (
             <>
               <Pagination
-                page={page()}
-                canPrevious={offset() > 0}
+                page={displayedPage()}
+                canPrevious={displayedOffset() > 0}
                 canNext={envelope().data.pageInfo.hasNextPage}
-                first={() => setOffset(0)}
-                previous={() => setOffset(Math.max(0, offset() - app.pageSize()))}
+                busy={subjects.loading}
+                busyAction={pendingAction()}
+                first={() => navigate("first", 0)}
+                previous={() =>
+                  navigate(
+                    "previous",
+                    Math.max(0, displayedOffset() - displayedPageSize()),
+                  )
+                }
                 next={() =>
-                  setOffset(envelope().data.pageInfo.nextOffset ?? offset())
+                  navigate(
+                    "next",
+                    envelope().data.pageInfo.nextOffset ?? displayedOffset(),
+                  )
                 }
               />
-              <div class="list-stack">
+              <div class="list-stack" aria-busy={subjects.loading}>
                 <For
                   each={envelope().data.data}
                   fallback={<EmptyState>No users on this page.</EmptyState>}

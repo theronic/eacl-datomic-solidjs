@@ -81,7 +81,7 @@ The resources panel SHALL group authorized resources by schema-derived type, fet
 
 #### Scenario: Update independent pagination timing
 - **WHEN** a new resource page is pending or replaces the prior page
-- **THEN** only the range and page timing fragment updates while the count and its timing/cache provenance retain the same Solid DOM fragment without flashing
+- **THEN** the last successful page, committed page number, pagination controls, count, and timing provenance remain visible while the initiating pagination button shows an in-place spinner, and the new page number, range, timing, and results publish together only after success
 
 #### Scenario: Recover from invalid cursor
 - **WHEN** a page request returns the API's `invalid-cursor` conflict
@@ -155,7 +155,7 @@ The cache segment SHALL include cache enablement, **Evict Cache**, and **Refresh
 - **THEN** the cache segment reports the refresh error while retaining the last successful snapshot for inspection
 
 ### Requirement: Focused asynchronous states and recovery
-Each independently fetched branch SHALL expose accessible pending, refreshing, empty, and error feedback without replacing the entire explorer or discarding its last successful unrelated data.
+Each independently fetched branch SHALL expose accessible pending, refreshing, empty, and error feedback without replacing the entire explorer or discarding its last successful data.
 
 #### Scenario: One group request fails
 - **WHEN** one resource group returns an API error while other groups succeed
@@ -163,7 +163,7 @@ Each independently fetched branch SHALL expose accessible pending, refreshing, e
 
 #### Scenario: Refetch a populated branch
 - **WHEN** an existing branch refetches because an input changed
-- **THEN** the UI distinguishes focused refresh from first load and avoids a whole-page loading flash
+- **THEN** the UI retains the last successful branch, distinguishes focused refresh from first load, keeps its controls mounted, and shows an in-place spinner on the initiating control without a whole-page loading flash
 
 ### Requirement: Seed controls and progress
 The header SHALL provide a validated positive server-count input and **Seed DB** action, SHALL keep the explorer mounted while seeding, and SHALL poll bounded progress/revision state so visible authorization queries can continue and react to each committed Datomic basis.

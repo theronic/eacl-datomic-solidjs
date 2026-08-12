@@ -127,11 +127,14 @@ describe("reactive resource paging", () => {
         ),
       ).toBe(true);
     });
-    expect(await within(group).findByText("Loading server page 2…"))
-      .toBeInTheDocument();
-    expect(within(group).queryByText("Server Page 1")).not.toBeInTheDocument();
+    const pendingNext = within(group).getByRole("button", { name: "Next" });
+    expect(pendingNext).toBeDisabled();
+    expect(pendingNext).toHaveAttribute("aria-busy", "true");
+    expect(pendingNext.querySelector(".button-spinner")).toBeInTheDocument();
+    expect(within(group).getByText("Server Page 1")).toBeInTheDocument();
+    expect(within(group).getByText("Page 1")).toBeInTheDocument();
     expect(group.querySelector(".group-card__page-stats"))
-      .toHaveTextContent("Loading page 2…");
+      .toHaveTextContent("1–1(3.2mshit)Loading page 2…");
     expect(group.querySelector(".group-card__page-stats"))
       .not.toHaveTextContent("21–21");
     expect(group.querySelector(".group-card__count-stats")).toBe(countStats);
@@ -247,7 +250,7 @@ describe("reactive resource paging", () => {
     });
   });
 
-  it("replaces a stale page with a retryable error before publishing recovered data", async () => {
+  it("retains the last successful page with a retryable error before publishing recovered data", async () => {
     let secondPageAttempts = 0;
     setFetchImplementation(
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -290,7 +293,9 @@ describe("reactive resource paging", () => {
 
     expect(await within(group).findByText("Authorization traversal timed out"))
       .toBeInTheDocument();
-    expect(within(group).queryByText("Server Page 1")).not.toBeInTheDocument();
+    expect(within(group).getByText("Server Page 1")).toBeInTheDocument();
+    expect(within(group).getByText("Page 1")).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "Next" })).toBeEnabled();
     expect(within(group).getByText("Page 2 failed")).toBeInTheDocument();
     expect(within(group).getByRole("button", { name: "Previous page" }))
       .toBeInTheDocument();
@@ -341,7 +346,8 @@ describe("reactive resource paging", () => {
       .toBeInTheDocument();
     expect(within(group).getByRole("button", { name: "First page" }))
       .toBeInTheDocument();
-    expect(within(group).queryByText("Server Page 1")).not.toBeInTheDocument();
+    expect(within(group).getByText("Server Page 1")).toBeInTheDocument();
+    expect(within(group).getByText("Page 1")).toBeInTheDocument();
 
     fireEvent.click(within(group).getByRole("button", { name: "First page" }));
     expect(await within(group).findByText("Server Page 1")).toBeInTheDocument();

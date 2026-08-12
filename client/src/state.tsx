@@ -24,6 +24,7 @@ import type {
 
 interface AppStateValue {
   bootstrap: Resource<ApiSuccess<Bootstrap>>;
+  bootstrapData: Accessor<ApiSuccess<Bootstrap> | undefined>;
   refetchBootstrap: () => void;
   subjectId: Accessor<string>;
   setSubjectId: (value: string) => void;
@@ -59,6 +60,7 @@ export const AppStateProvider: ParentComponent = (props) => {
     () => true,
     () => bootstrapRequest.run<Bootstrap>("/api/bootstrap"),
   );
+  const [bootstrapData, setBootstrapData] = createSignal<ApiSuccess<Bootstrap>>();
   const [subjectId, setSubjectSignal] = createSignal(preferences.subjectId);
   const [permission, setPermissionSignal] = createSignal(preferences.permission);
   const [selectedResource, setSelectedResource] = createSignal<EaclObject>();
@@ -122,6 +124,7 @@ export const AppStateProvider: ParentComponent = (props) => {
       () => (bootstrap.loading || bootstrap.error ? undefined : bootstrap()),
       (envelope) => {
         if (!envelope) return;
+        setBootstrapData(envelope);
         if (!mutationRevision()) setMutationRevision(envelope.meta.revision);
         setSeedProgress(envelope.data.seed);
         const permissions = Object.values(
@@ -209,6 +212,7 @@ export const AppStateProvider: ParentComponent = (props) => {
 
   const value: AppStateValue = {
     bootstrap,
+    bootstrapData,
     refetchBootstrap: () => void refetchBootstrapResource(),
     subjectId,
     setSubjectId,

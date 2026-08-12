@@ -55,8 +55,13 @@ describe("subjects and permissions", () => {
       .toHaveTextContent("User 1 user-1");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(await screen.findByText("Loading subjects page 2…")).toBeInTheDocument();
-    expect(screen.queryByText("user-1", { selector: ".resource-caption__id" }))
-      .not.toBeInTheDocument();
+    expect(screen.getByText("user-1", { selector: ".resource-caption__id" }))
+      .toBeInTheDocument();
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+    const pendingNext = screen.getByRole("button", { name: "Next" });
+    expect(pendingNext).toBeDisabled();
+    expect(pendingNext).toHaveAttribute("aria-busy", "true");
+    expect(pendingNext.querySelector(".button-spinner")).toBeInTheDocument();
     releaseSecondPage();
     await screen.findByText("Page 2");
     const requestsBeforeSelection = subjectRequests.length;

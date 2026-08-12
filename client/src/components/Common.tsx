@@ -64,39 +64,57 @@ export function Pagination(props: {
   canPrevious: boolean;
   canNext: boolean;
   busy?: boolean;
+  busyAction?: "first" | "previous" | "next";
   first: () => void;
   previous: () => void;
   next: () => void;
 }): JSX.Element {
+  const busy = () => props.busy || Boolean(props.busyAction);
   return (
-    <div class="pagination-controls" aria-label="Pagination" aria-busy={props.busy}>
+    <div class="pagination-controls" aria-label="Pagination" aria-busy={busy()}>
       <button
         type="button"
         class="pagination-button"
-        disabled={props.busy || !props.canPrevious}
+        disabled={busy() || !props.canPrevious}
+        aria-busy={props.busyAction === "first"}
         onClick={() => props.first()}
       >
+        <Show when={props.busyAction === "first"}>
+          <ButtonSpinner />
+        </Show>
         First
       </button>
       <button
         type="button"
         class="pagination-button"
-        disabled={props.busy || !props.canPrevious}
+        disabled={busy() || !props.canPrevious}
+        aria-busy={props.busyAction === "previous"}
         onClick={() => props.previous()}
       >
+        <Show when={props.busyAction === "previous"}>
+          <ButtonSpinner />
+        </Show>
         Previous
       </button>
       <span class="pagination-page">Page {props.page}</span>
       <button
         type="button"
         class="pagination-button"
-        disabled={props.busy || !props.canNext}
+        disabled={busy() || !props.canNext}
+        aria-busy={props.busyAction === "next"}
         onClick={() => props.next()}
       >
+        <Show when={props.busyAction === "next"}>
+          <ButtonSpinner />
+        </Show>
         Next
       </button>
     </div>
   );
+}
+
+export function ButtonSpinner(): JSX.Element {
+  return <span class="button-spinner" aria-hidden="true" />;
 }
 
 export function ErrorBlock(props: {

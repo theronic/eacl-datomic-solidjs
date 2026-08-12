@@ -1,7 +1,7 @@
 import { Show, type JSX } from "solid-js";
 import { CachePanel } from "./components/CachePanel";
 import { DetailPanel } from "./components/DetailPanel";
-import { EmptyState, ErrorBlock, LoadingBlock } from "./components/Common";
+import { EmptyState, ErrorBlock, InlineLoading, LoadingBlock } from "./components/Common";
 import { Header } from "./components/Header";
 import { ResourceTreePanel } from "./components/ResourceTree";
 import { SchemaPanel } from "./components/SchemaPanel";
@@ -41,15 +41,16 @@ function SeedProgress(): JSX.Element {
 
 export function App(): JSX.Element {
   const app = useAppState();
+  const hasBootstrap = () => Boolean(app.bootstrapData());
   return (
     <div class="app-shell" data-theme={app.theme()}>
       <Header />
-      <Show when={app.bootstrap.loading && !app.bootstrap.error}>
+      <Show when={app.bootstrap.loading && !hasBootstrap()}>
         <main class="loading-grid">
           <LoadingBlock label="explorer" />
         </main>
       </Show>
-      <Show when={app.bootstrap.error}>
+      <Show when={app.bootstrap.error && !hasBootstrap()}>
         <main class="loading-grid">
           <ErrorBlock
             label="Explorer bootstrap failed"
@@ -58,7 +59,21 @@ export function App(): JSX.Element {
           />
         </main>
       </Show>
-      <Show when={!app.bootstrap.loading && !app.bootstrap.error && app.bootstrap()}>
+      <Show when={hasBootstrap()}>
+        <Show when={app.bootstrap.loading}>
+          <section class="request-status-banner">
+            <InlineLoading label="Refreshing explorer data…" />
+          </section>
+        </Show>
+        <Show when={app.bootstrap.error}>
+          <section class="request-error-banner">
+            <ErrorBlock
+              label="Explorer refresh failed"
+              error={app.bootstrap.error}
+              retry={app.refetchBootstrap}
+            />
+          </section>
+        </Show>
         <Show when={app.seeding()}>
           <SeedProgress />
         </Show>

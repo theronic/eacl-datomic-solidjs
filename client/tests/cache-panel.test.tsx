@@ -63,7 +63,7 @@ describe("cache snapshot contract", () => {
       .not.toBeInTheDocument());
   });
 
-  it("hides the prior snapshot after a refresh failure", async () => {
+  it("retains the prior snapshot after a refresh failure", async () => {
     let refreshes = 0;
     setFetchImplementation(
       vi.fn(async (input: RequestInfo | URL) => {
@@ -88,7 +88,7 @@ describe("cache snapshot contract", () => {
     await screen.findByText(/"entries": 2/);
     fireEvent.click(screen.getByRole("button", { name: "Refresh cache" }));
     await screen.findByText("Cache unavailable");
-    expect(screen.queryByText(/"entries": 2/)).not.toBeInTheDocument();
+    expect(screen.getByText(/"entries": 2/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });

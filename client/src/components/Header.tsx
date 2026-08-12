@@ -2,17 +2,15 @@ import { createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import { LatestRequest } from "../api";
 import { useAppState } from "../state";
 import { PAGE_SIZE_OPTIONS, type PageSize, type SeedProgress } from "../types";
-import { ErrorBlock } from "./Common";
+import { ButtonSpinner, ErrorBlock } from "./Common";
 
 export function Header(): JSX.Element {
   const app = useAppState();
   const seedRequest = new LatestRequest();
   const [seedSize, setSeedSize] = createSignal("10000");
   const [seedError, setSeedError] = createSignal<unknown>();
-  const bootstrap = () =>
-    app.bootstrap.loading || app.bootstrap.error ? undefined : app.bootstrap();
-  const ready = () =>
-    !app.bootstrap.loading && !app.bootstrap.error && Boolean(app.bootstrap());
+  const bootstrap = () => app.bootstrapData();
+  const ready = () => Boolean(bootstrap());
   const serverTotal = () => (ready() ? (bootstrap()?.data.totals.servers ?? 0) : 0);
 
   const seed = async (event: SubmitEvent) => {
@@ -73,30 +71,22 @@ export function Header(): JSX.Element {
           <div class="stat-pill" aria-live="polite">
             <span class="stat-pill__label">
               {app.bootstrap.loading
-                ? "loading"
+                ? "refreshing"
                 : app.bootstrap.error
-                  ? "unavailable"
+                  ? ready()
+                    ? "stale"
+                    : "unavailable"
                   : app.seeding()
                     ? "seeding"
                     : "ready"}
             </span>
             <strong>
               <Show
-                when={!app.bootstrap.loading}
-                fallback="Refreshing explorer…"
+                when={app.seeding()}
+                fallback={ready() ? `${serverTotal()} servers` : "Server total unavailable"}
               >
-                <Show
-                  when={!app.bootstrap.error}
-                  fallback="Server total unavailable"
-                >
-                  <Show
-                    when={app.seeding()}
-                    fallback={`${serverTotal()} servers`}
-                  >
-                    {app.seedProgress()?.serversCompleted ?? 0} /{" "}
-                    {app.seedProgress()?.serversTarget ?? 0} servers
-                  </Show>
-                </Show>
+                {app.seedProgress()?.serversCompleted ?? 0} /{" "}
+                {app.seedProgress()?.serversTarget ?? 0} servers
               </Show>
             </strong>
           </div>
@@ -132,7 +122,11 @@ export function Header(): JSX.Element {
               class="seed-submit"
               type="submit"
               disabled={app.seeding() || !ready()}
+              aria-busy={app.seeding()}
             >
+              <Show when={app.seeding()}>
+                <ButtonSpinner />
+              </Show>
               {app.seeding() ? "Seeding…" : "Seed DB"}
             </button>
             </form>

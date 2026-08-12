@@ -13,6 +13,7 @@ import { LatestRequest } from "../api";
 import { useAppState } from "../state";
 import type { SchemaInfo } from "../types";
 import {
+  ButtonSpinner,
   DisclosureButton,
   ErrorBlock,
   InlineError,
@@ -30,14 +31,23 @@ export function SchemaPanel(): JSX.Element {
     () => true,
     () => request.run<SchemaInfo>("/api/schema"),
   );
+  const [displayedSchema, setDisplayedSchema] = createSignal<
+    ReturnType<typeof schema>
+  >();
   const [draft, setDraft] = createSignal("");
   const [committed, setCommitted] = createSignal("");
   const [writeError, setWriteError] = createSignal<unknown>();
   const [writing, setWriting] = createSignal(false);
   const expansionKey = "segment:schema";
   const expanded = () => app.isExpanded(expansionKey);
-  const writable = () => Boolean(app.bootstrap()?.data.capabilities.schemaWrite);
-  const settledSchema = () => schema.loading || schema.error ? undefined : schema();
+  const writable = () => Boolean(app.bootstrapData()?.data.capabilities.schemaWrite);
+  const settledSchema = displayedSchema;
+
+  createEffect(() => {
+    if (schema.loading || schema.error) return;
+    const envelope = schema();
+    if (envelope) setDisplayedSchema(envelope);
+  });
 
   createEffect(() => {
     const source = settledSchema()?.data.source;
@@ -108,7 +118,7 @@ export function SchemaPanel(): JSX.Element {
                   </p>
                 </div>
               </div>
-              <Show when={schema.loading}>
+              <Show when={schema.loading && !settledSchema()}>
                 <LoadingBlock label="schema" />
               </Show>
               <Show when={schema.error}>
@@ -153,8 +163,12 @@ export function SchemaPanel(): JSX.Element {
                       type="button"
                       class="pagination-button"
                       disabled={writing() || !draft() || draft() === committed()}
+                      aria-busy={writing()}
                       onClick={() => void writeSchema()}
                     >
+                      <Show when={writing()}>
+                        <ButtonSpinner />
+                      </Show>
                       {writing() ? "Writing…" : "Write Schema"}
                     </button>
                   </Show>

@@ -40,7 +40,7 @@ test.describe.serial("real Datahike-backed explorer", () => {
     });
   });
 
-  test("pagination never presents stale resources as the requested page", async ({
+  test("pagination retains the current page while the requested page loads", async ({
     page,
   }) => {
     let releaseFailure: () => void = () => undefined;
@@ -75,17 +75,24 @@ test.describe.serial("real Datahike-backed explorer", () => {
     const firstPageText = await firstPageResource.textContent();
     await serverGroup.getByRole("button", { name: "Next" }).click();
 
-    await expect(serverGroup.getByText("Loading server page 2…")).toBeVisible();
+    await expect(serverGroup.getByText("Loading page 2…")).toBeVisible();
     await expect(serverGroup.locator(".group-card__page-stats"))
       .toContainText("Loading page 2…");
-    await expect(serverGroup.locator(".resource-tree")).toHaveCount(0);
-    if (firstPageText) await expect(serverGroup.getByText(firstPageText.trim())).toHaveCount(0);
+    await expect(serverGroup.getByText("Page 1")).toBeVisible();
+    await expect(serverGroup.locator(".resource-tree")).toBeVisible();
+    if (firstPageText) await expect(serverGroup.getByText(firstPageText.trim())).toBeVisible();
+    const pendingNext = serverGroup.getByRole("button", { name: "Next" });
+    await expect(pendingNext).toBeDisabled();
+    await expect(pendingNext).toHaveAttribute("aria-busy", "true");
+    await expect(pendingNext.locator(".button-spinner")).toBeVisible();
 
     releaseFailure();
     await expect(serverGroup.getByText("Injected unreliable-backend timeout"))
       .toBeVisible();
     await expect(serverGroup.locator(".group-card__page-stats"))
       .toContainText("Page 2 failed");
+    if (firstPageText) await expect(serverGroup.getByText(firstPageText.trim())).toBeVisible();
+    await expect(serverGroup.getByText("Page 1")).toBeVisible();
     await expect(serverGroup.getByRole("button", { name: "Retry" })).toBeVisible();
     await expect(serverGroup.getByRole("button", { name: "Previous page" })).toBeVisible();
 

@@ -132,12 +132,14 @@ form `h<commit>.c<cache-generation>`.
 The explorer assumes every HTTP request can be slow, disconnected, malformed,
 or rejected. Client requests have a 35-second end-to-end deadline and
 superseded requests are aborted. Initial and replacement reads always render a
-labeled loading state; previous data is hidden rather than displayed under a
-new page number or query scope. Failures replace request-owned data with a
-named error and Retry action. Paginated failures also offer Previous Page, or
-First Page for an expired EACL cursor. Mutation controls report their in-flight
-state, clear invalidated snapshots, and keep validation drafts only where the
-draft is explicitly user-owned.
+labeled loading state. A replacement read keeps the last successful data and
+committed page number visible, disables duplicate navigation, and shows a
+spinner inside the initiating button. The new page number and results publish
+together only after success. Failures retain that last successful view beside
+a named error and Retry action; expired EACL cursors additionally offer First
+Page recovery. Mutation controls report their in-flight state and keep
+user-owned drafts or captured snapshots visible until a successful operation
+invalidates them.
 
 The EACL v8 cache uses explicit weighted tiers rather than the removed
 `remember-answers` setting. Defaults retain up to 16 MiB of completed answers,

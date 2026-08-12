@@ -90,7 +90,7 @@ The server will call EACL's authenticated pagination and bounded count operation
 
 Nested relationship pages are a sweep of distinct child resources. Their per-child permission decisions therefore bypass completed-answer caching, as recommended by EACL for non-repeating batch checks. This keeps recursive point authorization target-anchored instead of computing a complete forward denotation that scales with every reachable resource and holds the EACL schema read lock for the duration. The bounded relationship enumeration itself may still honor the requested cache mode; the combined authorization-filtered operation reports cache status as disabled.
 
-The graph bundle is lazy, production assets are compressed/cacheable, and the client keeps previous unrelated panel data during focused refetches. A repeatable 10,000-server benchmark will verify bounded response sizes and a documented local warmed-cache p95 budget of 250 ms for default-page authorization requests; CI functional tests will avoid hardware-sensitive absolute timing assertions.
+The graph bundle is lazy, production assets are compressed/cacheable, and the client keeps the last successful branch data and controls mounted during focused refetches. Pagination commits its displayed cursor depth only after the replacement succeeds, while the initiating control carries an in-place spinner. A repeatable 10,000-server benchmark will verify bounded response sizes and a documented local warmed-cache p95 budget of 250 ms for default-page authorization requests; CI functional tests will avoid hardware-sensitive absolute timing assertions.
 
 ### 10. Verify boundaries at multiple levels
 
