@@ -194,11 +194,13 @@ to delete durable data. After loading:
 6. resize to the steady candidate only after operator approval and repeat the
    clean-JVM gates.
 
-Do not automatically prewarm EACL during service startup. The canonical cold
-server page can occupy a traversal for minutes on this legacy S3 index. Run
-`prewarm-cache!` only as an explicit loopback-nREPL profiling operation, and
-cancel it before public acceptance if it does not complete within the planned
-maintenance window.
+Production starts one asynchronous, cooperatively cancellable prewarm for the
+canonical `user-1` server page; health, bootstrap, and nREPL readiness do not
+wait for it. Its extended-timeout pass primes Datahike's S3/store cache without
+retaining a mismatched EACL answer, then it replays the exact normal-timeout
+browser demand to populate the reusable answer key. It never prewarms a count.
+Track its state through `GET /api/cache`; shutdown signals its cancellation
+token before the executor is stopped.
 
 For a legacy store created before durable demo totals existed, set
 `EACL_DATAHIKE_DEMO_LEGACY_SERVER_COUNT` to the independently verified exact

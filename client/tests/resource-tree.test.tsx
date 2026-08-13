@@ -84,7 +84,13 @@ describe("reactive resource paging", () => {
     expect(await within(group).findByText("48")).toBeInTheDocument();
     expect(
       requestBodies.find(({ path }) => path.endsWith("count-resources"))?.body,
-    ).toMatchObject({ countLimit: 50_000 });
+    ).toMatchObject({
+      subject: { type: "user", id: "user-1" },
+      countLimit: 50_000,
+    });
+    expect(
+      requestBodies.find(({ path }) => path.endsWith("lookup-resources"))?.body,
+    ).toMatchObject({ subject: { type: "user", id: "user-1" } });
 
     const lookupsBeforeEviction = requestBodies.filter(({ path }) =>
       path.endsWith("lookup-resources"),

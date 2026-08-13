@@ -5,10 +5,11 @@ import {
   type Theme,
 } from "./types";
 
-const STORAGE_KEY = "eacl-datahike-demo.preferences.v1";
+const STORAGE_KEY = "eacl-datahike-demo.preferences.v2";
+const LEGACY_STORAGE_KEY = "eacl-datahike-demo.preferences.v1";
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
-  subjectId: "super-user",
+  subjectId: "user-1",
   permission: "view",
   pageSize: 20,
   cacheEnabled: true,
@@ -29,11 +30,19 @@ function theme(value: unknown): Theme {
 export function readPreferences(storage?: Storage): AppPreferences {
   try {
     const activeStorage = storage ?? globalThis.localStorage;
-    const raw = activeStorage.getItem(STORAGE_KEY);
+    const current = activeStorage.getItem(STORAGE_KEY);
+    const legacy = current === null ? activeStorage.getItem(LEGACY_STORAGE_KEY) : null;
+    const raw = current ?? legacy;
     if (!raw) return { ...DEFAULT_PREFERENCES };
     const value = JSON.parse(raw) as Partial<AppPreferences>;
+    // v1 persisted the old default on every visit, so returning viewers cannot
+    // be distinguished from viewers who explicitly chose it. Migrate that one
+    // value to the safer v2 default while retaining all other preferences. A
+    // subsequent explicit super-user selection is stored in v2 and preserved.
+    const migratedLegacyDefault = legacy !== null && value.subjectId === "super-user";
     return {
       subjectId:
+        !migratedLegacyDefault &&
         typeof value.subjectId === "string" && value.subjectId
           ? value.subjectId
           : DEFAULT_PREFERENCES.subjectId,

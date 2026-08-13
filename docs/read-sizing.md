@@ -104,7 +104,10 @@ The original fresh-process prewarm performed the canonical super-user
 20-server page and a demand-bounded 50,000-server count. It completed in
 216,018 ms. This proved the cold delay was backend traversal and S3/index
 access, not delayed GC or cache eviction. The deployment now prewarms only the
-page; counts are requested after a page settles and never block readiness.
+`user-1` page, matching the lower-fanout default subject shown to new and
+migrated viewers. The extended-timeout pass primes only Datahike's S3/store
+cache, then an exact normal-timeout browser demand populates the reusable EACL
+answer key. Counts are requested after a page settles and never block readiness.
 Once populated, the browser reported a 5.5 ms page hit and an 8.7 ms count hit.
 Repeated direct API hits spent about 3 ms inside the server; a reused HTTPS
 connection observed 242–250 ms end to end from the operator's South Africa

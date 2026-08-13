@@ -108,9 +108,18 @@
   (support/with-test-system [system]
     (let [token (eacl/cancellation-token)
           warmed (system/prewarm-cache! system token)
+          reused (eacl/lookup-resources
+                  (:acl system)
+                  {:subject (data/->object :user "user-1")
+                   :permission :view
+                   :resource/type :server
+                   :first 20
+                   :cache? true})
           stats (datahike-eacl/cache-stats (:acl system))]
       (is (= :complete (:status warmed)))
+      (is (= 20 (:storage-prime-items warmed)))
       (is (= 20 (:page-items warmed)))
+      (is (true? (:cached? reused)))
       (is (= 1 (:exact-entries stats)))
       (is (zero? (get-in stats [:subproblems :oversized-rejections]))))))
 

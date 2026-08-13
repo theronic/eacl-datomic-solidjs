@@ -141,16 +141,29 @@
   "Warms the public demo's canonical first page.
   This is intentionally a demo-specific optimization, not an EACL default."
   [system cancellation-token]
-  (let [common {:subject (data/->object :user "super-user")
+  (let [common {:subject (data/->object :user "user-1")
                 :permission :view
                 :resource/type :server
-                :cache? true
-                :timeout-ms cache-prewarm-timeout-ms
                 :cancellation-token cancellation-token}
         started (System/nanoTime)
-        page (eacl/lookup-resources (:acl system) (assoc common :first 20))]
+        ;; The extended timeout is part of the public query identity, so that
+        ;; cold traversal cannot directly populate the normal HTTP answer key.
+        ;; Prime Datahike's store cache without retaining that one-off answer,
+        ;; then replay the exact browser demand under the configured timeout.
+        storage-prime
+        (eacl/lookup-resources
+         (:acl system)
+         (assoc common
+                :first 20
+                :cache? false
+                :timeout-ms cache-prewarm-timeout-ms))
+        page
+        (eacl/lookup-resources
+         (:acl system)
+         (assoc common :first 20 :cache? true))]
     {:status :complete
      :elapsed-ms (/ (double (- (System/nanoTime) started)) 1000000.0)
+     :storage-prime-items (count (:data storage-prime))
      :page-items (count (:data page))}))
 
 (defn- start-cache-prewarm
