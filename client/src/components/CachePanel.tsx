@@ -84,10 +84,10 @@ export function CachePanel(): JSX.Element {
           </DisclosureButton>
           <div class="cache-controls">
             <Show when={!expanded() && refreshing()}>
-              <InlineLoading label="Loading cache metrics…" />
+              <InlineLoading label="Loading cache metrics" />
             </Show>
             <Show when={!expanded() && evicting()}>
-              <InlineLoading label="Evicting cache…" />
+              <InlineLoading label="Evicting cache" />
             </Show>
             <Show when={!expanded() && refreshError()}>
               <InlineError label="Cache refresh failed" />
@@ -122,7 +122,7 @@ export function CachePanel(): JSX.Element {
                 <Show when={evicting()}>
                   <ButtonSpinner />
                 </Show>
-                {evicting() ? "Evicting…" : "Evict Cache"}
+                Evict Cache
               </button>
             </Show>
             <button
@@ -135,7 +135,7 @@ export function CachePanel(): JSX.Element {
               <Show when={refreshing()}>
                 <ButtonSpinner />
               </Show>
-              {refreshing() ? "Refreshing…" : "Refresh cache"}
+              Refresh cache
             </button>
           </div>
         </div>

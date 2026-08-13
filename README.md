@@ -149,10 +149,13 @@ weights, entries, evictions, oversized rejections, proof failures, continuation
 use, and per-operation HTTP hit/miss/disabled counts. Tune the corresponding
 `EACL_DATAHIKE_DEMO_CACHE_*` variables from those counters; do not enlarge a
 tier merely because a cold computation times out before it can publish.
-In production, the server starts a bounded background prewarm for the
-canonical super-user 20-server page and 50,000-item count after Jetty becomes
-ready. Its `running`, `complete`, `cancelled`, or `error` state is included in
-`GET /api/cache`; shutdown cooperatively cancels the in-flight warmup.
+Production does not start an automatic cache prewarm. A cold canonical page
+against the million-resource S3 store exceeded three minutes, so automatic
+warming could compete with the first real user and occupy one of four traversal
+permits. Counts and pages remain demand-driven. Operators can invoke
+`prewarm-cache!` explicitly through loopback nREPL while profiling a controlled
+maintenance run; its state is then included in `GET /api/cache` and shutdown
+cooperatively cancels it.
 
 ## Production S3 configuration
 
@@ -169,11 +172,14 @@ EACL_DATAHIKE_DEMO_STORE_BACKEND=s3
 EACL_DATAHIKE_DEMO_STORE_ID=<stable-uuid>
 EACL_DATAHIKE_DEMO_S3_BUCKET=<globally-unique-private-bucket>
 EACL_DATAHIKE_DEMO_S3_REGION=<aws-region>
+EACL_DATAHIKE_DEMO_DATAHIKE_STORE_CACHE_SIZE=8192
+EACL_DATAHIKE_DEMO_DATAHIKE_SEARCH_CACHE_SIZE=0
 EACL_DATAHIKE_DEMO_SECURITY_KEY=<at-least-32-random-characters>
 EACL_DATAHIKE_DEMO_ADMIN_TOKEN=<different-at-least-32-random-characters>
 EACL_DATAHIKE_DEMO_NREPL_PORT=7888
 EACL_DATAHIKE_DEMO_SEED_TRANSACTION_SIZE=250
-EACL_DATAHIKE_DEMO_SEED_PAUSE_MS=50
+EACL_DATAHIKE_DEMO_SEED_PAUSE_MS=0
+EACL_DATAHIKE_DEMO_SEED_IN_FLIGHT=4
 EACL_DATAHIKE_DEMO_CACHE_MAX_ENTRIES=512
 EACL_DATAHIKE_DEMO_CACHE_PROJECTION_MAX_WEIGHT=4194304
 EACL_DATAHIKE_DEMO_CACHE_DENOTATION_MAX_WEIGHT=4194304
@@ -195,9 +201,11 @@ parameterized AWS procedure and capacity gates.
 
 ## Seed, recovery, and operations
 
-Always accept the 48-resource fixture first. Seed jobs are asynchronous,
-single-flight, and pace configurable 250-item transactions within logical
-2,000-server account batches. Poll
+Always accept the 48-resource fixture first. Seed jobs are asynchronous and
+single-flight. They submit configurable 250-item transactions through a
+bounded four-request window so Datahike can auto-batch pending commits without
+allowing unbounded loader memory. Entity chunks finish before relationship
+chunks for each logical 2,000-server account. Poll
 `GET /api/seed`; the explorer remains readable between commits. Do not begin a
 large seed until small-fixture API, browser, restart, and S3 persistence checks
 pass.
@@ -208,6 +216,11 @@ one-million-resource production acceptance gates are recorded in
 [`docs/read-sizing.md`](docs/read-sizing.md). A temporary loading resize, if it
 is ever needed, requires separate operator cost approval and is reverted before
 read acceptance.
+
+Large immutable stores need an explicit storage-maintenance policy. See
+[`docs/storage-maintenance.md`](docs/storage-maintenance.md) for the measured
+reachability evidence, safe GC prerequisites, and why version expiration alone
+does not reclaim current unreachable objects.
 
 Operational files live under `infra/` after provisioning. Common commands are:
 

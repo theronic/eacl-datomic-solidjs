@@ -117,7 +117,11 @@ definition server {
     :db/doc "Human-readable server name used by benchmark counts."
     :db/cardinality :db.cardinality/one
     :db/valueType :db.type/string
-    :db/index true}])
+    :db/index true}
+   {:db/ident :demo/server-count
+    :db/doc "Durable server-resource contribution used for O(accounts) startup totals."
+    :db/cardinality :db.cardinality/one
+    :db/valueType :db.type/long}])
 
 (def demo-profile
   {:accounts 4
@@ -131,7 +135,8 @@ definition server {
    :servers-per-account 2000})
 
 (def default-seed-transaction-size 250)
-(def default-seed-pause-ms 50)
+(def default-seed-pause-ms 0)
+(def default-seed-in-flight 4)
 
 (def ready-progress
   {:status :ready
@@ -151,6 +156,18 @@ definition server {
   (d/q '[:find (count ?server) .
          :where [?server :server/name]]
        db))
+
+(defn maintained-server-count
+  "Returns the durable O(accounts) server total, or nil for an unmigrated store."
+  [db]
+  (when (d/q '[:find ?attribute .
+               :where [?attribute :db/ident :demo/server-count]]
+             db)
+    (let [rows (d/q '[:find ?entity ?count
+                      :where [?entity :demo/server-count ?count]]
+                    db)]
+      (when (seq rows)
+        (reduce + (map second rows))))))
 
 (defn- parse-account-number
   [account-id]
@@ -285,6 +302,7 @@ definition server {
          (mapcat :relationships vpc-data)
          (mapcat :relationships server-data))]
     {:account-id account-id
+     :server-count servers-per-account
      :entities (vec entities)
      :relationships (vec relationships)}))
 
@@ -295,22 +313,45 @@ definition server {
      acl
      (mapv #(eacl/->RelationshipUpdate :touch %) relationships))))
 
+(defn- record-account-server-count!
+  [conn account-id server-count]
+  (d/transact conn [{:db/id [:eacl/id account-id]
+                     :demo/server-count server-count}]))
+
 (defn- paced!
   [pause-ms]
   (when (pos? pause-ms)
     (Thread/sleep pause-ms)))
 
-(defn- transact-entity-chunks!
-  [conn entities transaction-size pause-ms]
-  (doseq [chunk (partition-all transaction-size entities)]
-    (d/transact conn (vec chunk))
+(defn- submit-windows!
+  [items in-flight submit! pause-ms]
+  (doseq [window (partition-all in-flight items)]
+    (let [jobs (mapv #(future (submit! %)) window)
+          results (mapv (fn [job]
+                          (try
+                            @job
+                            nil
+                            (catch Throwable throwable throwable)))
+                        jobs)]
+      (when-let [failure (some #(when (instance? Throwable %) %) results)]
+        (throw failure)))
     (paced! pause-ms)))
 
+(defn- transact-entity-chunks!
+  [conn entities transaction-size in-flight pause-ms]
+  (submit-windows!
+   (partition-all transaction-size entities)
+   in-flight
+   #(d/transact conn (vec %))
+   pause-ms))
+
 (defn- write-relationship-chunks!
-  [acl relationships transaction-size pause-ms]
-  (doseq [chunk (partition-all transaction-size relationships)]
-    (write-relationships! acl chunk)
-    (paced! pause-ms)))
+  [acl relationships transaction-size in-flight pause-ms]
+  (submit-windows!
+   (partition-all transaction-size relationships)
+   in-flight
+   #(write-relationships! acl %)
+   pause-ms))
 
 (defn- install-root-fixtures!
   [conn acl]
@@ -348,10 +389,11 @@ definition server {
   (mapv
    (fn [offset]
      (let [account-number (+ account-start offset)
-           {:keys [account-id entities relationships]}
+           {:keys [account-id server-count entities relationships]}
            (account-batch account-number profile)]
        (d/transact conn entities)
        (write-relationships! acl relationships)
+       (record-account-server-count! conn account-id server-count)
        (progress! account-id (inc offset))
        account-id))
    (range (:accounts profile))))
@@ -361,25 +403,37 @@ definition server {
   (:db/id (d/entity db ident-or-ref)))
 
 (defn install-demo!
-  [conn acl]
-  (when-not (entid (d/db conn) :eacl-datahike-demo/demo-seeded)
-    (eacl/write-schema! acl default-schema)
-    (install-root-fixtures! conn acl)
-    (let [account-ids
-          (install-accounts! conn acl demo-profile 0 (fn [_ _] nil))]
-      (eacl/write-relationships!
-       acl
-       (mapv
-        (fn [account-id]
-          (eacl/->RelationshipUpdate
-           :touch
-           (eacl/->Relationship
-            (->object :user "user-1")
-            :owner
-            (->object :account account-id))))
-        (take 2 account-ids))))
-    (d/transact conn [{:db/ident :eacl-datahike-demo/demo-seeded}]))
-  (assoc ready-progress :total-servers (count-servers (d/db conn))))
+  ([conn acl]
+   (install-demo! conn acl nil))
+  ([conn acl legacy-server-count]
+   (when-not (entid (d/db conn) :demo/server-count)
+     (d/transact conn [(last demo-attributes)]))
+   (when-not (entid (d/db conn) :eacl-datahike-demo/demo-seeded)
+     (eacl/write-schema! acl default-schema)
+     (install-root-fixtures! conn acl)
+     (let [account-ids
+           (install-accounts! conn acl demo-profile 0 (fn [_ _] nil))]
+       (eacl/write-relationships!
+        acl
+        (mapv
+         (fn [account-id]
+           (eacl/->RelationshipUpdate
+            :touch
+            (eacl/->Relationship
+             (->object :user "user-1")
+             :owner
+             (->object :account account-id))))
+         (take 2 account-ids))))
+     (d/transact conn [{:db/ident :eacl-datahike-demo/demo-seeded}]))
+   (let [db (d/db conn)
+         maintained-total (maintained-server-count db)
+         total (or maintained-total
+                   legacy-server-count
+                   (count-servers db))]
+     (when-not maintained-total
+       (d/transact conn [{:db/ident :eacl-datahike-demo/server-total
+                          :demo/server-count total}]))
+     (assoc ready-progress :total-servers total))))
 
 (defn- requested-server-counts
   [server-count]
@@ -410,9 +464,14 @@ definition server {
 (defn seed-reserved!
   ([conn acl !seed-running? !seed-progress server-count]
    (seed-reserved! conn acl !seed-running? !seed-progress server-count
-                   default-seed-transaction-size default-seed-pause-ms))
+                   default-seed-transaction-size default-seed-pause-ms
+                   default-seed-in-flight))
   ([conn acl !seed-running? !seed-progress server-count
     transaction-size pause-ms]
+   (seed-reserved! conn acl !seed-running? !seed-progress server-count
+                   transaction-size pause-ms default-seed-in-flight))
+  ([conn acl !seed-running? !seed-progress server-count
+    transaction-size pause-ms in-flight]
   (let [started (System/nanoTime)
         servers-before (:total-servers @!seed-progress)
         server-counts (requested-server-counts server-count)
@@ -439,9 +498,11 @@ definition server {
                       (account-batch account-number profile)
                       completed' (+ completed account-server-count)]
                   (transact-entity-chunks!
-                   conn entities transaction-size pause-ms)
+                   conn entities transaction-size in-flight pause-ms)
                   (write-relationship-chunks!
-                   acl relationships transaction-size pause-ms)
+                   acl relationships transaction-size in-flight pause-ms)
+                  (record-account-server-count!
+                   conn account-id account-server-count)
                   (reset! !seed-progress
                           {:status :seeding
                            :servers-added 0
@@ -498,12 +559,17 @@ definition server {
   ([conn acl !seed-running? !seed-progress server-count max-seed-servers]
    (seed-more! conn acl !seed-running? !seed-progress server-count
                max-seed-servers default-seed-transaction-size
-               default-seed-pause-ms))
+               default-seed-pause-ms default-seed-in-flight))
   ([conn acl !seed-running? !seed-progress server-count max-seed-servers
     transaction-size pause-ms]
+   (seed-more! conn acl !seed-running? !seed-progress server-count
+               max-seed-servers transaction-size pause-ms
+               default-seed-in-flight))
+  ([conn acl !seed-running? !seed-progress server-count max-seed-servers
+    transaction-size pause-ms in-flight]
    (reserve-seed! !seed-running? server-count max-seed-servers)
    (seed-reserved! conn acl !seed-running? !seed-progress server-count
-                   transaction-size pause-ms)))
+                   transaction-size pause-ms in-flight)))
 
 (defn committed-schema-source
   [db]

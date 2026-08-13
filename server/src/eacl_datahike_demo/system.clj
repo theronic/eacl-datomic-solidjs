@@ -67,7 +67,8 @@
                      :!seed-running? (atom false)
                      :!seed-progress !seed-progress
                      :evict-lock (Object.)})
-            ready-progress (data/install-demo! conn acl)
+            ready-progress (data/install-demo!
+                            conn acl (:legacy-server-count runtime-config))
             system (assoc system :handler (api/app system))]
         (reset! !seed-progress ready-progress)
         system)
@@ -127,7 +128,7 @@
 (def ^:private cache-prewarm-timeout-ms 300000)
 
 (defn prewarm-cache!
-  "Warms the public demo's canonical million-resource page and bounded count.
+  "Warms the public demo's canonical first page.
   This is intentionally a demo-specific optimization, not an EACL default."
   [system cancellation-token]
   (let [common {:subject (data/->object :user "super-user")
@@ -137,15 +138,10 @@
                 :timeout-ms cache-prewarm-timeout-ms
                 :cancellation-token cancellation-token}
         started (System/nanoTime)
-        page (eacl/lookup-resources (:acl system) (assoc common :first 20))
-        count-result
-        (eacl/count-resources (:acl system) (assoc common :count-limit 50000))]
+        page (eacl/lookup-resources (:acl system) (assoc common :first 20))]
     {:status :complete
      :elapsed-ms (/ (double (- (System/nanoTime) started)) 1000000.0)
-     :page-items (count (:data page))
-     :count (:count count-result)
-     :count-limit (:limit count-result)
-     :count-truncated? (:truncated? count-result)}))
+     :page-items (count (:data page))}))
 
 (defn- start-cache-prewarm
   [system]

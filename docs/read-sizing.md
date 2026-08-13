@@ -2,10 +2,12 @@
 
 The permanent EC2 size is selected for the steady read workload, not for the
 largest transient heap observed while bulk data is being created. Production
-seeding defaults to transactions of 250 items with a 50 ms pause after every
-entity and relationship transaction. Both values are validated and can be
-adjusted with `EACL_DATAHIKE_DEMO_SEED_TRANSACTION_SIZE` and
-`EACL_DATAHIKE_DEMO_SEED_PAUSE_MS`.
+seeding defaults to transactions of 250 items, no artificial pause, and four
+in-flight submissions. The bounded window lets Datahike auto-batch pending
+commits while capping loader concurrency. The values are validated and can be
+adjusted with `EACL_DATAHIKE_DEMO_SEED_TRANSACTION_SIZE`,
+`EACL_DATAHIKE_DEMO_SEED_PAUSE_MS`, and
+`EACL_DATAHIKE_DEMO_SEED_IN_FLIGHT`.
 
 For the operator-approved temporary `t4g.large` loader, the transaction size is
 500 and the inter-transaction delay is zero. The external loader restarts and
@@ -98,13 +100,31 @@ automatic cache prewarm completed, Java RSS was 1,832,164 KiB and the host
 reported 5,855,404,032 bytes available. There was no swap, seed-only systemd
 drop-in, or cache capacity pressure.
 
-The fresh-process prewarm intentionally performs the canonical super-user
+The original fresh-process prewarm performed the canonical super-user
 20-server page and a demand-bounded 50,000-server count. It completed in
-216,018 ms. The cold work is therefore backend traversal and S3/index access,
-not delayed GC or cache eviction. Once populated, the browser reported a 5.5
-ms page hit and an 8.7 ms count hit. Repeated direct API hits spent about 3 ms
-inside the server; a reused HTTPS connection observed 242–250 ms end to end
-from the operator's South Africa connection.
+216,018 ms. This proved the cold delay was backend traversal and S3/index
+access, not delayed GC or cache eviction. The deployment now prewarms only the
+page; counts are requested after a page settles and never block readiness.
+Once populated, the browser reported a 5.5 ms page hit and an 8.7 ms count hit.
+Repeated direct API hits spent about 3 ms inside the server; a reused HTTPS
+connection observed 242–250 ms end to end from the operator's South Africa
+connection. A later page-only cold prewarm still exceeded three minutes and
+was cooperatively cancelled while the store cache was being measured. A
+clean, instrumented run completed in 148,374 ms. The page requires 4,536
+indexed relationship scans: EACL must open the account, team, VPC, and
+direct-grant streams before it can prove the first 20 globally ordered
+results. After those Datahike nodes were resident, the same query with EACL's
+completed-answer cache disabled took 214 ms; the completed-answer hit remained
+a few milliseconds.
+
+Production therefore starts a bounded page-only prewarm after Jetty and nREPL
+are ready. Health and bootstrap do not wait for it, its state is visible from
+`GET /api/cache`, and its cancellation token is signalled during shutdown.
+The Datahike store cache is 8,192 entries, enough to retain the observed
+3,935-node canonical working set plus subsequent explorer traffic. The
+per-snapshot search cache is disabled: these EACL scans use distinct native
+index seeks, so memoizing identical search calls did not address the cold
+fan-out and only duplicated cache bookkeeping.
 
 The retained cache footprint after prewarm and acceptance traffic was small:
 
@@ -126,6 +146,12 @@ The versioned S3 bucket contained 1,083,511 current objects totaling
 14,602,949,290 bytes (13.60 GiB). Including noncurrent versions it contained
 1,093,050 versions totaling 14,860,894,463 bytes (13.84 GiB); the 257,945,173
 bytes of noncurrent data are subject to the seven-day expiration policy.
+
+A read-only reachability walk subsequently found 95,575 reachable store keys.
+Compared with the 1,083,511 current S3 objects, approximately 987,936 objects,
+or 91.2% by count, were unreachable immutable storage history. Noncurrent S3
+versions accounted for only 257,945,173 bytes, so shortening the version
+lifecycle cannot explain or materially fix the 14.60 GB current footprint.
 
 The two-process helper functions are `benchmark/seed-file!` and
 `benchmark/read-file!` in `server/dev/benchmark.clj`. The caller supplies an

@@ -15,7 +15,6 @@ import type { ApiSuccess, KnownSubjectPage } from "../types";
 import {
   EmptyState,
   ErrorBlock,
-  InlineLoading,
   LoadingBlock,
   Pagination,
   TypeBadge,
@@ -151,9 +150,6 @@ export function SubjectsPanel(): JSX.Element {
             <span class="section-meta">
               {settledSubjects()?.data.pageInfo.total} total
             </span>
-          </Show>
-          <Show when={subjects.loading && settledSubjects()}>
-            <InlineLoading label={`Loading subjects page ${targetPage()}…`} />
           </Show>
         </div>
 

@@ -181,9 +181,6 @@ function RelationshipGroup(props: {
           </span>
         </DisclosureButton>
         <MetaTiming meta={settledRelationships()?.meta} />
-        <Show when={relationships.loading && settledRelationships()}>
-          <InlineLoading label={`Loading page ${cursors().length + 1}…`} />
-        </Show>
       </div>
       <Show when={expanded()}>
         <div id={`${key()}-content`} class="relationship-group__content">
@@ -315,6 +312,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   const countRequest = new LatestRequest();
   const [cursors, setCursors] = createSignal<string[]>([]);
   const [countDemandVersion, setCountDemandVersion] = createSignal(0);
+  const [settledPageScope, setSettledPageScope] = createSignal("");
   let activeCountScope = "";
   let activeCountLimit = initialCountLimit;
   const cursor = () => cursors().at(-1);
@@ -351,7 +349,9 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   };
   const countSource = () => {
     const value = base();
-    return value ? ([...value, countLimit()] as const) : false;
+    return value && settledPageScope() === countScope()
+      ? ([...value, countLimit()] as const)
+      : false;
   };
   const [page, { refetch: refetchPage }] = createResource(pageSource, (input) =>
     pageRequest.run<ObjectPage>("/api/eacl/lookup-resources", {
@@ -381,6 +381,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   const [displayedPage, setDisplayedPage] = createSignal<ApiSuccess<ObjectPage>>();
   const [displayedCount, setDisplayedCount] =
     createSignal<ApiSuccess<ResourceCount>>();
+  const [displayedCountScope, setDisplayedCountScope] = createSignal("");
   const [displayedCursors, setDisplayedCursors] = createSignal<string[]>([]);
   const [displayedPageSize, setDisplayedPageSize] = createSignal(app.pageSize());
   const [pendingPageAction, setPendingPageAction] =
@@ -393,6 +394,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
     setDisplayedPage(envelope);
     setDisplayedCursors([...cursors()]);
     setDisplayedPageSize(app.pageSize());
+    setSettledPageScope(countScope());
   });
   createEffect(() => {
     if (!page.loading) setPendingPageAction(undefined);
@@ -400,7 +402,10 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   createEffect(() => {
     if (count.loading || count.error) return;
     const envelope = count();
-    if (envelope) setDisplayedCount(envelope);
+    if (envelope) {
+      setDisplayedCount(envelope);
+      setDisplayedCountScope(countScope());
+    }
   });
 
   const doubleCountLimit = () => {
@@ -428,13 +433,21 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
       { defer: true },
     ),
   );
+  createEffect(
+    on(
+      countScope,
+      () => countRequest.abort(),
+      { defer: true },
+    ),
+  );
   onCleanup(() => {
     pageRequest.abort();
     countRequest.abort();
   });
 
   const settledPage = displayedPage;
-  const settledCount = displayedCount;
+  const settledCount = () =>
+    displayedCountScope() === countScope() ? displayedCount() : undefined;
   const pageNavigationAction = () => {
     if (cursors().length > displayedCursors().length) return "next" as const;
     if (!cursors().length && displayedCursors().length) return "first" as const;
@@ -487,7 +500,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                 when={settledPage()}
                 fallback={
                   page.loading
-                    ? <InlineLoading label={`Loading page ${cursors().length + 1}…`} />
+                    ? <InlineLoading label={`Loading page ${cursors().length + 1}`} />
                     : page.error
                       ? <InlineError label={`Page ${cursors().length + 1} failed`} />
                       : <span class="section-meta">—</span>
@@ -497,8 +510,8 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                   {rangeStart()}–{rangeEnd()}
                 </span>
                 <PaginationTiming meta={settledPage()?.meta} />
-                <Show when={page.loading}>
-                  <InlineLoading label={`Loading page ${cursors().length + 1}…`} />
+                <Show when={page.loading && !pendingPageAction()}>
+                  <InlineLoading label={`Refreshing ${props.resourceType} resources`} />
                 </Show>
                 <Show when={page.error}>
                   <InlineError label={`Page ${cursors().length + 1} failed`} />
@@ -511,7 +524,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                 when={settledCount()}
                 fallback={
                   count.loading
-                    ? <InlineLoading label="Counting…" />
+                    ? <InlineLoading label={`Counting ${props.resourceType} resources`} />
                     : count.error
                       ? <InlineError label="Count failed" />
                       : <span class="section-meta">—</span>
@@ -543,7 +556,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                     </Show>
                     <PaginationTiming meta={envelope().meta} />
                     <Show when={count.loading && !envelope().data.truncated}>
-                      <InlineLoading label="Counting…" />
+                      <InlineLoading label={`Counting ${props.resourceType} resources`} />
                     </Show>
                     <Show when={count.error}>
                       <InlineError label="Count failed" />

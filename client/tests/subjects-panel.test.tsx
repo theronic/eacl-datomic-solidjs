@@ -54,7 +54,6 @@ describe("subjects and permissions", () => {
     expect(screen.getByText("User 1", { selector: ".resource-caption__name" }).parentElement)
       .toHaveTextContent("User 1 user-1");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    expect(await screen.findByText("Loading subjects page 2…")).toBeInTheDocument();
     expect(screen.getByText("user-1", { selector: ".resource-caption__id" }))
       .toBeInTheDocument();
     expect(screen.getByText("Page 1")).toBeInTheDocument();

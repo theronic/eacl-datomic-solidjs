@@ -65,6 +65,9 @@ export EACL_DATAHIKE_DEMO_S3_BUCKET=eacl-datahike-local
 export EACL_DATAHIKE_DEMO_S3_REGION=us-east-1
 export EACL_DATAHIKE_DEMO_S3_ENDPOINT=http://127.0.0.1:19000
 export EACL_DATAHIKE_DEMO_S3_PATH_STYLE_ACCESS=true
+export EACL_DATAHIKE_DEMO_DATAHIKE_STORE_CACHE_SIZE=8192
+export EACL_DATAHIKE_DEMO_DATAHIKE_SEARCH_CACHE_SIZE=0
+export EACL_DATAHIKE_DEMO_SEED_IN_FLIGHT=4
 
 npm run install:client
 npm run dev:server
@@ -94,6 +97,10 @@ EACL_DATAHIKE_DEMO_E2E_URL=http://127.0.0.1:5173 npm run test:e2e
 For the disposable storage compatibility suite instead of a persistent
 development environment, run `infra/scripts/test-minio.sh`. It creates and
 removes its own container and test database.
+
+Before testing storage reclamation, read
+[`storage-maintenance.md`](storage-maintenance.md). Never point a disposable
+MinIO GC experiment at the production store ID or bucket.
 
 ## Stop or remove the local environment
 

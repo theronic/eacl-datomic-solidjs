@@ -111,11 +111,24 @@
           stats (datahike-eacl/cache-stats (:acl system))]
       (is (= :complete (:status warmed)))
       (is (= 20 (:page-items warmed)))
-      (is (= 48 (:count warmed)))
-      (is (= 50000 (:count-limit warmed)))
-      (is (false? (:count-truncated? warmed)))
-      (is (= 2 (:exact-entries stats)))
+      (is (= 1 (:exact-entries stats)))
       (is (zero? (get-in stats [:subproblems :oversized-rejections]))))))
+
+(deftest seed-submission-window-is-bounded-and-concurrent
+  (let [active (atom 0)
+        peak (atom 0)
+        completed (atom [])
+        submit! (fn [item]
+                  (let [now (swap! active inc)]
+                    (swap! peak max now)
+                    (Thread/sleep 20)
+                    (swap! completed conj item)
+                    (swap! active dec)))
+        submit-windows! @#'data/submit-windows!]
+    (submit-windows! (range 10) 4 submit! 0)
+    (is (= 4 @peak))
+    (is (= (set (range 10)) (set @completed)))
+    (is (zero? @active))))
 
 (deftest asynchronous-seed-keeps-eacl-queries-available
   (support/with-test-system [system]

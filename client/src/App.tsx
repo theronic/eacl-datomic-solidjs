@@ -62,7 +62,7 @@ export function App(): JSX.Element {
       <Show when={hasBootstrap()}>
         <Show when={app.bootstrap.loading}>
           <section class="request-status-banner">
-            <InlineLoading label="Refreshing explorer data…" />
+            <InlineLoading label="Refreshing explorer data" />
           </section>
         </Show>
         <Show when={app.bootstrap.error}>

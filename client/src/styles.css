@@ -1197,14 +1197,13 @@ button {
 .loading-block {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
   min-height: 46px;
   padding: 12px 14px;
   border: 1px dashed var(--border-strong);
   border-radius: 14px;
   background: var(--summary);
-  color: var(--muted);
-  font-size: 0.84rem;
+  color: var(--accent);
 }
 
 .inline-loading,
@@ -1220,6 +1219,7 @@ button {
 
 .inline-loading {
   color: var(--muted);
+  vertical-align: middle;
 }
 
 .inline-error {

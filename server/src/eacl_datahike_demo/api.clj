@@ -371,7 +371,8 @@
                (data/seed-reserved!
                 (:conn system) (:acl system) !running? !progress server-count
                 (get-in system [:config :seed-transaction-size])
-                (get-in system [:config :seed-pause-ms]))
+                (get-in system [:config :seed-pause-ms])
+                (get-in system [:config :seed-in-flight]))
                (catch Throwable throwable
                  (log/error "Background seed job failed"
                             {:exception-class (.getName (class throwable))})

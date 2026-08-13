@@ -52,11 +52,12 @@ after loading before measuring reads.
 
 Datahike is configured with persistent-set diff buffering, root fusion,
 `keep-history? false`, and `commit-graph? false`. These reduce write
-amplification but do not reclaim unreachable immutable index nodes. Do not run
-experimental storage GC or assume the small MinIO extrapolation is linear at
-one million resources. Measure S3 current objects/bytes and noncurrent versions
-after each scale test, and evaluate a verified export/direct-index import when
-the corresponding Datahike release is available.
+amplification but do not reclaim unreachable immutable index nodes. A
+read-only mark found 95,575 reachable keys in the one-million-resource store,
+versus 1,083,511 current S3 objects. Use bounded in-flight seed submissions to
+activate Datahike commit auto-batching, and follow the approval-gated GC process
+in [`storage-maintenance.md`](storage-maintenance.md). Do not assume the small
+MinIO extrapolation is linear at one million resources.
 
 ## Prepare an untracked deployment environment
 
@@ -172,6 +173,18 @@ to delete durable data. After loading:
    cache statistics, and S3 current/noncurrent storage;
 6. resize to the steady candidate only after operator approval and repeat the
    clean-JVM gates.
+
+Do not automatically prewarm EACL during service startup. The canonical cold
+server page can occupy a traversal for minutes on this legacy S3 index. Run
+`prewarm-cache!` only as an explicit loopback-nREPL profiling operation, and
+cancel it before public acceptance if it does not complete within the planned
+maintenance window.
+
+For a legacy store created before durable demo totals existed, set
+`EACL_DATAHIKE_DEMO_LEGACY_SERVER_COUNT` to the independently verified exact
+server count for one upgrade restart. After health reports that value, remove
+the variable; the database now maintains totals without scanning all server
+datoms at startup.
 
 ## Operations and rollback
 

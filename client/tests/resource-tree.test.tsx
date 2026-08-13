@@ -81,7 +81,7 @@ describe("reactive resource paging", () => {
     expect(screen.getByText("Server Page 1").parentElement)
       .toHaveTextContent("Server Page 1 server-page-1");
     expect(await within(group).findByText("1–1")).toBeInTheDocument();
-    expect(within(group).getByText("48")).toBeInTheDocument();
+    expect(await within(group).findByText("48")).toBeInTheDocument();
     expect(
       requestBodies.find(({ path }) => path.endsWith("count-resources"))?.body,
     ).toMatchObject({ countLimit: 50_000 });
@@ -134,7 +134,9 @@ describe("reactive resource paging", () => {
     expect(within(group).getByText("Server Page 1")).toBeInTheDocument();
     expect(within(group).getByText("Page 1")).toBeInTheDocument();
     expect(group.querySelector(".group-card__page-stats"))
-      .toHaveTextContent("1–1(3.2mshit)Loading page 2…");
+      .toHaveTextContent("1–1(3.2mshit)");
+    expect(group.querySelector(".group-card__page-stats .inline-loading"))
+      .not.toBeInTheDocument();
     expect(group.querySelector(".group-card__page-stats"))
       .not.toHaveTextContent("21–21");
     expect(group.querySelector(".group-card__count-stats")).toBe(countStats);

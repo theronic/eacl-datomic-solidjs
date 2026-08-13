@@ -155,9 +155,14 @@ export function ErrorBlock(props: {
 
 export function InlineLoading(props: { label: string }): JSX.Element {
   return (
-    <span class="inline-loading" role="status" aria-live="polite">
-      <span class="loading-dot" aria-hidden="true" />
-      {props.label}
+    <span
+      class="inline-loading"
+      role="status"
+      aria-live="polite"
+      aria-label={props.label}
+      title={props.label}
+    >
+      <span class="button-spinner" aria-hidden="true" />
     </span>
   );
 }
@@ -174,10 +179,17 @@ export function LoadingBlock(props: {
   label: string;
   refreshing?: Accessor<boolean>;
 }): JSX.Element {
+  const status = () =>
+    props.refreshing?.() ? `Refreshing ${props.label}` : `Loading ${props.label}`;
   return (
-    <div class="loading-block" role="status" aria-live="polite">
-      <span class="loading-dot" aria-hidden="true" />
-      {props.refreshing?.() ? `Refreshing ${props.label}…` : `Loading ${props.label}…`}
+    <div
+      class="loading-block"
+      role="status"
+      aria-live="polite"
+      aria-label={status()}
+      title={status()}
+    >
+      <span class="button-spinner" aria-hidden="true" />
     </div>
   );
 }

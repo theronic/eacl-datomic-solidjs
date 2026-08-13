@@ -25,7 +25,7 @@ describe("schema editor", () => {
       </AppStateProvider>
     ));
 
-    fireEvent.click(screen.getByRole("button", { name: /Schema \(/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Schema \(/ }));
     const editor = await screen.findByRole("textbox", { name: "Spice Schema" });
     await waitFor(() => expect(editor).toHaveValue(schemaSource));
     fireEvent.input(editor, { target: { value: "definition broken {" } });
@@ -61,7 +61,7 @@ describe("schema editor", () => {
       </AppStateProvider>
     ));
 
-    fireEvent.click(screen.getByRole("button", { name: /Schema \(/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Schema \(/ }));
     const editor = await screen.findByRole("textbox", { name: "Spice Schema" });
     await waitFor(() => expect(editor).toHaveValue(schemaSource));
     expect(editor).toHaveAttribute("readonly");

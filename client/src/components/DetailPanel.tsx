@@ -14,7 +14,6 @@ import type { ApiSuccess, EaclObject, ObjectPage } from "../types";
 import {
   EmptyState,
   ErrorBlock,
-  InlineLoading,
   LoadingBlock,
   MetaTiming,
   Pagination,
@@ -118,9 +117,6 @@ function PermissionSubjects(props: {
       <div class="section-header">
         <p class="panel-label">:{props.permission}</p>
         <MetaTiming meta={settledSubjects()?.meta} />
-        <Show when={subjects.loading && settledSubjects()}>
-          <InlineLoading label={`Loading page ${cursors().length + 1}…`} />
-        </Show>
       </div>
       <Show when={subjects.loading && !settledSubjects()}>
         <LoadingBlock label={`permission holders page ${cursors().length + 1}`} />

@@ -12,7 +12,10 @@
     (is (= 65536 (:max-body-bytes config/default-config)))
     (is (= 1000000 (:max-seed-servers config/default-config)))
     (is (= 250 (:seed-transaction-size config/default-config)))
-    (is (= 50 (:seed-pause-ms config/default-config)))
+    (is (= 0 (:seed-pause-ms config/default-config)))
+    (is (= 4 (:seed-in-flight config/default-config)))
+    (is (= 8192 (:datahike-store-cache-size config/default-config)))
+    (is (zero? (:datahike-search-cache-size config/default-config)))
     (is (= 512 (:cache-max-entries config/default-config)))
     (is (= (* 16 1024 1024)
            (:cache-answer-max-weight config/default-config))))
@@ -25,6 +28,12 @@
     (is (= 0 (:seed-pause-ms
               (config/from-env
                {"EACL_DATAHIKE_DEMO_SEED_PAUSE_MS" "0"}))))
+    (is (= 8 (:seed-in-flight
+              (config/from-env
+               {"EACL_DATAHIKE_DEMO_SEED_IN_FLIGHT" "8"}))))
+    (is (= 1000048 (:legacy-server-count
+                    (config/from-env
+                     {"EACL_DATAHIKE_DEMO_LEGACY_SERVER_COUNT" "1000048"}))))
     (is (= 1024 (:cache-max-entries
                  (config/from-env
                   {"EACL_DATAHIKE_DEMO_CACHE_MAX_ENTRIES" "1024"}))))
@@ -57,7 +66,9 @@
       (is (= store-id (get-in database-config [:store :id])))
       (is (= true (:attribute-refs? database-config)))
       (is (= false (:keep-history? database-config)))
-      (is (= false (:commit-graph? database-config)))))
+      (is (= false (:commit-graph? database-config)))
+      (is (= 8192 (:store-cache-size database-config)))
+      (is (zero? (:search-cache-size database-config)))))
   (testing "a local S3-compatible endpoint is parsed without custom credential variables"
     (let [store-id (random-uuid)
           parsed (config/from-env

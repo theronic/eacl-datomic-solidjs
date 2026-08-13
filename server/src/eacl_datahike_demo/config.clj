@@ -13,11 +13,15 @@
    :s3-region "us-east-1"
    :s3-endpoint-override nil
    :s3-path-style-access? false
+   :datahike-store-cache-size 8192
+   :datahike-search-cache-size 0
    :request-timeout-ms 30000
    :max-body-bytes 65536
    :max-seed-servers 1000000
    :seed-transaction-size 250
-   :seed-pause-ms 50
+   :seed-pause-ms 0
+   :seed-in-flight 4
+   :legacy-server-count nil
    :max-count-limit 1000000
    :max-eacl-concurrency 4
    :cache-max-entries 512
@@ -125,7 +129,9 @@
 (defn validate
   [{:keys [mode host port store-backend store-id store-path s3-bucket
            s3-region request-timeout-ms max-body-bytes max-seed-servers
-           seed-transaction-size seed-pause-ms max-count-limit
+           seed-transaction-size seed-pause-ms seed-in-flight
+           legacy-server-count max-count-limit
+           datahike-store-cache-size datahike-search-cache-size
            max-eacl-concurrency cache-max-entries
            cache-projection-max-weight cache-denotation-max-weight
            cache-answer-max-weight cache-managed-proof-max-atoms
@@ -153,6 +159,8 @@
                          [:max-body-bytes max-body-bytes]
                          [:max-seed-servers max-seed-servers]
                          [:seed-transaction-size seed-transaction-size]
+                         [:seed-in-flight seed-in-flight]
+                         [:datahike-store-cache-size datahike-store-cache-size]
                          [:max-count-limit max-count-limit]
                          [:max-eacl-concurrency max-eacl-concurrency]
                          [:cache-max-entries cache-max-entries]
@@ -171,6 +179,15 @@
               "seed-transaction-size must not exceed 2000."))
   (when-not (and (integer? seed-pause-ms) (not (neg? seed-pause-ms)))
     (invalid! :seed-pause-ms "seed-pause-ms must not be negative."))
+  (when-not (and (integer? datahike-search-cache-size)
+                 (not (neg? datahike-search-cache-size)))
+    (invalid! :datahike-search-cache-size
+              "datahike-search-cache-size must not be negative."))
+  (when (and legacy-server-count
+             (not (and (integer? legacy-server-count)
+                       (not (neg? legacy-server-count)))))
+    (invalid! :legacy-server-count
+              "legacy-server-count must not be negative."))
   (when (> jetty-min-threads jetty-max-threads)
     (invalid! :jetty-min-threads
               "jetty-min-threads must not exceed jetty-max-threads."))
@@ -192,7 +209,7 @@
 (defn datahike-config
   [{:keys [store-backend store-id store-path s3-bucket s3-region
            s3-endpoint-override s3-path-style-access? s3-access-key
-           s3-secret]}]
+           s3-secret datahike-store-cache-size datahike-search-cache-size]}]
   (case store-backend
     :memory nil
     :file {:store {:backend :file
@@ -202,6 +219,8 @@
            :attribute-refs? true
            :keep-history? false
            :max-string-length 0
+           :store-cache-size datahike-store-cache-size
+           :search-cache-size datahike-search-cache-size
            :commit-graph? false}
     :s3 {:store (cond-> {:backend :s3
                          :bucket s3-bucket
@@ -219,6 +238,8 @@
          :attribute-refs? true
          :keep-history? false
          :max-string-length 0
+         :store-cache-size datahike-store-cache-size
+         :search-cache-size datahike-search-cache-size
          :index-config {:diff-buf-size 256}
          :fuse-index-roots? true
          :commit-graph? false}))
@@ -264,6 +285,16 @@
                 (parse-bool-env :s3-path-style-access?
                                 (value "S3_PATH_STYLE_ACCESS")))
 
+         (value "DATAHIKE_STORE_CACHE_SIZE")
+         (assoc :datahike-store-cache-size
+                (parse-positive-long :datahike-store-cache-size
+                                     (value "DATAHIKE_STORE_CACHE_SIZE")))
+
+         (value "DATAHIKE_SEARCH_CACHE_SIZE")
+         (assoc :datahike-search-cache-size
+                (parse-nonnegative-long :datahike-search-cache-size
+                                        (value "DATAHIKE_SEARCH_CACHE_SIZE")))
+
          (value "REQUEST_TIMEOUT_MS")
          (assoc :request-timeout-ms
                 (parse-positive-long :request-timeout-ms
@@ -288,6 +319,16 @@
          (assoc :seed-pause-ms
                 (parse-nonnegative-long :seed-pause-ms
                                         (value "SEED_PAUSE_MS")))
+
+         (value "SEED_IN_FLIGHT")
+         (assoc :seed-in-flight
+                (parse-positive-long :seed-in-flight
+                                     (value "SEED_IN_FLIGHT")))
+
+         (value "LEGACY_SERVER_COUNT")
+         (assoc :legacy-server-count
+                (parse-nonnegative-long :legacy-server-count
+                                        (value "LEGACY_SERVER_COUNT")))
 
          (value "MAX_COUNT_LIMIT")
          (assoc :max-count-limit

@@ -90,20 +90,26 @@ export function SchemaPanel(): JSX.Element {
             onClick={() => app.toggleExpanded(expansionKey)}
           >
             <span class="group-card__title">
-              Schema ({settledSchema()?.data.resourceCount ?? 0} resources, {" "}
-              {settledSchema()?.data.relationCount ?? 0} relations, {" "}
-              {settledSchema()?.data.permissionCount ?? 0} permissions)
+              Schema
+              <Show when={settledSchema()}>
+                {(envelope) => (
+                  <> ({envelope().data.resourceCount} resources, {" "}
+                    {envelope().data.relationCount} relations, {" "}
+                    {envelope().data.permissionCount} permissions)
+                  </>
+                )}
+              </Show>
             </span>
           </DisclosureButton>
           <Show when={schema.loading}>
-            <InlineLoading label="Loading schema…" />
+            <InlineLoading label="Loading schema" />
           </Show>
           <Show when={schema.error}>
             <InlineError label="Schema unavailable" />
           </Show>
-          <Show when={!schema.loading && !schema.error && (writing() || draft() !== committed())}>
+          <Show when={!schema.loading && !schema.error && !writing() && draft() !== committed()}>
             <span class="section-meta" role="status">
-              {writing() ? "Writing schema…" : "Unsaved changes"}
+              Unsaved changes
             </span>
           </Show>
         </div>
@@ -169,7 +175,7 @@ export function SchemaPanel(): JSX.Element {
                       <Show when={writing()}>
                         <ButtonSpinner />
                       </Show>
-                      {writing() ? "Writing…" : "Write Schema"}
+                      Write Schema
                     </button>
                   </Show>
                 </div>
