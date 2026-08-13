@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+action="${1:?expected apply or remove}"
+uid="$(id -u christian)"
+
+rule() {
+  local tool="$1"
+  shift
+  case "$action" in
+    apply)
+      "$tool" -C OUTPUT "$@" 2>/dev/null || "$tool" -I OUTPUT 1 "$@"
+      ;;
+    remove)
+      while "$tool" -C OUTPUT "$@" 2>/dev/null; do
+        "$tool" -D OUTPUT "$@"
+      done
+      ;;
+    *)
+      echo "expected apply or remove" >&2
+      exit 64
+      ;;
+  esac
+}
+
+rule /usr/sbin/iptables -m owner --uid-owner "$uid" \
+  -d 169.254.169.254/32 -j REJECT
+rule /usr/sbin/iptables -m owner --uid-owner "$uid" \
+  -p tcp --dport 7888 -j REJECT
+rule /usr/sbin/ip6tables -m owner --uid-owner "$uid" \
+  -p tcp --dport 7888 -j REJECT
+

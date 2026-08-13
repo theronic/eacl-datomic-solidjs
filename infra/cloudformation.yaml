@@ -4,7 +4,7 @@ Description: Isolated EACL v8 Datahike demo (single writer, same-region S3 backe
 Parameters:
   OperatorCidr:
     Type: String
-    Description: Single trusted public IPv4 CIDR allowed to SSH.
+    Description: Approved public IPv4 CIDR allowed to reach key-authenticated SSH.
     AllowedPattern: "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/(?:3[0-2]|[12]?[0-9])$"
   SshPublicKey:
     Type: String
@@ -209,7 +209,7 @@ Resources:
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Public HTTP(S), operator-CIDR SSH; Jetty and nREPL stay private.
+      GroupDescription: Public HTTP(S) and approved-CIDR SSH; Jetty and nREPL stay private.
       VpcId: !Ref DemoVpc
       SecurityGroupIngress:
         - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP and ACME}
@@ -218,7 +218,7 @@ Resources:
           FromPort: 22
           ToPort: 22
           CidrIp: !Ref OperatorCidr
-          Description: Operator SSH only
+          Description: Key-authenticated SSH
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0

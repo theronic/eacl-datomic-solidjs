@@ -11,7 +11,13 @@ IDs, hostnames, addresses, store IDs, credentials, or operator key paths.
 - S3 and EC2 are in one region; an S3 gateway endpoint avoids NAT charges.
 - EC2 receives S3 access through its instance role. Never put AWS access keys in
   the service environment.
-- Only ports 80 and 443 are public. SSH 22 is restricted to one approved `/32`.
+- Ports 80, 443, and key-authenticated SSH 22 are public on the deployed demo.
+  Password and root authentication are disabled. Jetty and nREPL remain
+  loopback-only.
+- A maintainer diagnostic account can be installed with
+  `install-restricted-debug-user.sh`. It denies forwarding, blocks that UID
+  from EC2 metadata and nREPL, and grants only the fixed memory-report command
+  through `sudo`.
 - Jetty 8088 and nREPL 7888 bind to `127.0.0.1` and have no security-group
   ingress.
 - The root-owned application environment is mode `0600`. The signing key,
@@ -125,6 +131,20 @@ ssh -i "$EACL_SSH_PRIVATE_KEY" -L 17888:127.0.0.1:7888 \
   "ubuntu@$EACL_INSTANCE_HOST"
 clj-nrepl-eval -p 17888 "(+ 20 22)"
 ```
+
+To grant a maintainer restricted diagnostic access, send one RSA public key to
+the installer over the existing operator SSH connection:
+
+```bash
+ssh -i "$EACL_SSH_PRIVATE_KEY" "ubuntu@$EACL_INSTANCE_HOST" \
+  'sudo bash /home/ubuntu/eacl-deploy/infra/scripts/install-restricted-debug-user.sh' \
+  < maintainer.pub
+```
+
+The account name is `christian`. The installer locks its password, disables
+SSH forwarding, blocks its UID from EC2 instance metadata and loopback nREPL,
+and grants only `sudo /usr/local/sbin/eacl-memory-report`. Re-running the
+installer replaces that account's authorized key with the key provided.
 
 ## Publish DNS and TLS
 

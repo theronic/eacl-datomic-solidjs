@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+service=eacl-datahike-demo.service
+pid="$(/usr/bin/systemctl show --property MainPID --value "$service")"
+
+echo "== service =="
+/usr/bin/systemctl show "$service" \
+  --property ActiveState,SubState,MainPID,MemoryCurrent,MemoryPeak,MemorySwapCurrent,MemorySwapPeak,CPUUsageNSec
+
+echo "== host memory =="
+/usr/bin/free -h
+/usr/bin/awk '/^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree):/ {print}' /proc/meminfo
+
+echo "== pressure =="
+/usr/bin/cat /proc/pressure/memory
+
+if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && [[ -r "/proc/$pid/status" ]]; then
+  echo "== JVM process $pid =="
+  /usr/bin/awk '/^(Name|State|Threads|VmPeak|VmSize|VmHWM|VmRSS|RssAnon|RssFile|RssShmem|VmSwap):/ {print}' "/proc/$pid/status"
+  if [[ -r "/proc/$pid/smaps_rollup" ]]; then
+    /usr/bin/awk '/^(Rss|Pss|Pss_Anon|Pss_File|Pss_Shmem|Private_Clean|Private_Dirty|Anonymous|Swap):/ {print}' "/proc/$pid/smaps_rollup"
+  fi
+fi
+
+echo "== recent service log =="
+/usr/bin/journalctl --unit "$service" --lines 200 --no-pager
+

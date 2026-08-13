@@ -35,8 +35,8 @@ cat <<EOF
 - Bucket: $EACL_BUCKET_NAME (private, SSE-S3, versioned, seven-day noncurrent expiry, retained)
 - Store ID: $EACL_STORE_ID
 - IAM: dedicated-bucket ListBucket; object access only ${EACL_STORE_ID}_* (including ${EACL_STORE_ID}_.konserve-metadata)
-- SSH: ${operator_ip}/32 using $EACL_SSH_PUBLIC_KEY ($key_fingerprint)
-- Public ports: 80/443; SSH 22 only from ${operator_ip}/32; 8088/7888 have no ingress
+- SSH: approved CIDR ${EACL_OPERATOR_CIDR:-${operator_ip}/32} using $EACL_SSH_PUBLIC_KEY ($key_fingerprint)
+- Public ports: 80/443; SSH 22 from approved CIDR ${EACL_OPERATOR_CIDR:-${operator_ip}/32}; 8088/7888 have no ingress
 - Route53: $EACL_DNS_NAME currently $current_a
 - Fixed monthly subtotal: \$$fixed_monthly
 - Measured steady monthly subtotal including extrapolated S3: \$$steady_monthly

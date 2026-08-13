@@ -205,9 +205,9 @@ It is deliberately not the operator's `ubuntu` account and has no general
   diagnostic that reports cgroup/JVM memory, `/proc` memory summaries, host
   pressure, and recent application logs.
 
-The EC2 security group still requires Christian's public source IP as an
-explicit `/32`; port 22 has not been opened to the internet. Once that CIDR is
-approved, the connection is:
+Port 22 accepts key-authenticated SSH from any public IPv4 address. Password
+and root login remain disabled, and the per-user restrictions above apply
+regardless of source address. The connection is:
 
 ```bash
 ssh christian@54.163.189.23
