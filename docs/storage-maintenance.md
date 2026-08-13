@@ -12,6 +12,12 @@ or 91.2% of current objects by count. They are unreachable immutable index
 nodes left behind as commits publish new persistent-tree roots. They are not
 live EACL resources, and they are not primarily S3 version history.
 
+This is an exact object-count comparison, not a byte-summed live-set inventory.
+Object sizes vary, so 91.2% unreachable by count must not be presented as 91.2%
+of bytes. The byte-level result we can state exactly is that current objects
+occupy 14,602,949,290 bytes while noncurrent versions add only 257,945,173
+bytes; S3 version retention therefore cannot explain the current footprint.
+
 Diff buffering, fused roots, `keep-history? false`, and
 `commit-graph? false` reduce the number of writes. They do not sweep objects
 made unreachable by later roots. S3 lifecycle expiry removes noncurrent object

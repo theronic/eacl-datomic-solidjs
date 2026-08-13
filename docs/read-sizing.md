@@ -152,6 +152,9 @@ Compared with the 1,083,511 current S3 objects, approximately 987,936 objects,
 or 91.2% by count, were unreachable immutable storage history. Noncurrent S3
 versions accounted for only 257,945,173 bytes, so shortening the version
 lifecycle cannot explain or materially fix the 14.60 GB current footprint.
+The reachability run counted keys rather than summing each object's S3 size;
+the unreachable byte fraction remains to be measured before predicting the
+post-GC bucket size.
 
 The two-process helper functions are `benchmark/seed-file!` and
 `benchmark/read-file!` in `server/dev/benchmark.clj`. The caller supplies an
