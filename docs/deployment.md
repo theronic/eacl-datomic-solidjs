@@ -208,6 +208,11 @@ datoms at startup.
 
 ## Operations and rollback
 
+Deploy host and public-service alarms from the separate monitoring stack after
+the application is healthy. It cannot replace EC2 and keeps the Telegram token
+in Secrets Manager. See [`monitoring.md`](monitoring.md) for thresholds, cost,
+secret handling, deployment, acceptance testing, and rotation.
+
 ```bash
 infra/scripts/remote-health.sh "$EACL_INSTANCE_HOST" "$EACL_SSH_PRIVATE_KEY"
 infra/scripts/rollback-artifact.sh "$EACL_INSTANCE_HOST" \

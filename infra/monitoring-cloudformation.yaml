@@ -1,0 +1,410 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Monitoring and Telegram alarms for the EACL v8 Datahike demo.
+
+Parameters:
+  DemoInstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: Existing EACL Datahike demo instance to monitor.
+  DemoInstanceRoleName:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9_+=,.@-]{1,128}$"
+    Description: Existing EC2 role that receives metric-only CloudWatch access.
+  PublicHostname:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])$"
+    Description: Public hostname checked over HTTPS, without a trailing dot.
+  TelegramChatId:
+    Type: String
+    AllowedPattern: "^-?[0-9]+$"
+    Description: Numeric Telegram destination; it is an identifier, not a credential.
+  AlarmActionsEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Keep false until the secret, agent, and destination are verified.
+  CpuCreditThreshold:
+    Type: Number
+    Default: 24
+    MinValue: 0
+  CpuThresholdPercent:
+    Type: Number
+    Default: 85
+    MinValue: 1
+    MaxValue: 100
+  MemoryAvailableThresholdPercent:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    MaxValue: 99
+
+Conditions:
+  AlertsEnabled: !Equals [!Ref AlarmActionsEnabled, "true"]
+
+Resources:
+  TelegramBotToken:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: demo/eacl/datahike/telegram
+      Description: Telegram bot token for EACL Datahike CloudWatch notifications.
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-telegram}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: demo-eacl-datahike-alarms
+      DisplayName: EACL Datahike alarms
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-alarms}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  NotifierRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: demo-eacl-datahike-telegram-notifier
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-only-telegram-token
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref TelegramBotToken
+        - PolicyName: write-own-log-stream
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt NotifierLogGroup.Arn
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-telegram-notifier}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  NotifierFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: NotifierLogGroup
+    Properties:
+      FunctionName: demo-eacl-datahike-telegram-notifier
+      Description: Sends EACL Datahike alarm transitions to Telegram.
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt NotifierRole.Arn
+      MemorySize: 128
+      Timeout: 15
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          TELEGRAM_SECRET_ARN: !Ref TelegramBotToken
+          TELEGRAM_CHAT_ID: !Ref TelegramChatId
+          DEMO_URL: !Sub "https://${PublicHostname}/datahike/"
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          import boto3
+
+
+          def render_message(raw_message):
+              try:
+                  alarm = json.loads(raw_message)
+              except (TypeError, json.JSONDecodeError):
+                  return str(raw_message)
+              if not isinstance(alarm, dict) or "AlarmName" not in alarm:
+                  return str(raw_message)
+              state = alarm.get("NewStateValue", "UNKNOWN")
+              marker = "RECOVERED" if state == "OK" else state
+              lines = [
+                  f"EACL Datahike {marker}",
+                  f"Alarm: {alarm['AlarmName']}",
+                  f"Reason: {alarm.get('NewStateReason', 'not supplied')}",
+                  f"Time: {alarm.get('StateChangeTime', 'unknown')}",
+                  f"Region: {alarm.get('Region', 'unknown')}",
+                  f"Demo: {os.environ['DEMO_URL']}",
+              ]
+              return "\n".join(lines)
+
+
+          def handler(event, context):
+              secret_arn = os.environ["TELEGRAM_SECRET_ARN"]
+              chat_id = os.environ["TELEGRAM_CHAT_ID"]
+              token = boto3.client("secretsmanager").get_secret_value(
+                  SecretId=secret_arn
+              )["SecretString"].strip()
+              if not token:
+                  raise RuntimeError("Telegram bot token secret is empty")
+
+              delivered = 0
+              for record in event.get("Records", []):
+                  sns = record.get("Sns", {})
+                  message = render_message(sns.get("Message", ""))[:3900]
+                  body = urllib.parse.urlencode({
+                      "chat_id": chat_id,
+                      "text": message,
+                      "disable_web_page_preview": "true",
+                  }).encode("utf-8")
+                  request = urllib.request.Request(
+                      f"https://api.telegram.org/bot{token}/sendMessage",
+                      data=body,
+                      headers={"Content-Type": "application/x-www-form-urlencoded"},
+                      method="POST",
+                  )
+                  try:
+                      with urllib.request.urlopen(request, timeout=10) as response:
+                          accepted = json.loads(response.read().decode("utf-8"))
+                  except Exception as error:
+                      status = getattr(error, "code", "network-error")
+                      raise RuntimeError(
+                          f"Telegram delivery failed with status {status}"
+                      ) from None
+                  if not accepted.get("ok"):
+                      raise RuntimeError("Telegram rejected the notification")
+                  delivered += 1
+                  print(
+                      "delivered telegram notification "
+                      f"sns_message_id={sns.get('MessageId', 'unknown')}"
+                  )
+              token = None
+              return {"delivered": delivered}
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-telegram-notifier}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  NotifierLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/demo-eacl-datahike-telegram-notifier
+      RetentionInDays: 14
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-telegram-notifier}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  AllowSnsToInvokeNotifier:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref NotifierFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref AlarmTopic
+
+  TelegramSubscription:
+    Type: AWS::SNS::Subscription
+    DependsOn: AllowSnsToInvokeNotifier
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: lambda
+      Endpoint: !GetAtt NotifierFunction.Arn
+
+  InstanceMetricPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: eacl-datahike-cloudwatch-memory
+      Roles: [!Ref DemoInstanceRoleName]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: "*"
+            Condition:
+              StringEquals:
+                cloudwatch:namespace: CWAgent
+
+  PublicHealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Properties:
+      HealthCheckConfig:
+        EnableSNI: true
+        FailureThreshold: 3
+        FullyQualifiedDomainName: !Ref PublicHostname
+        Port: 443
+        RequestInterval: 30
+        ResourcePath: /datahike/api/health
+        Type: HTTPS
+      HealthCheckTags:
+        - {Key: Name, Value: demo-eacl-datahike-public-health}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  CpuCreditAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-low-cpu-credits
+      AlarmDescription: T4g CPU credit balance remained at or below the reserve for ten minutes.
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/EC2
+      MetricName: CPUCreditBalance
+      Dimensions:
+        - {Name: InstanceId, Value: !Ref DemoInstanceId}
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: !Ref CpuCreditThreshold
+      ComparisonOperator: LessThanOrEqualToThreshold
+      TreatMissingData: missing
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-low-cpu-credits}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  HighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-high-cpu
+      AlarmDescription: !Sub "Average instance CPU remained at or above ${CpuThresholdPercent} percent for fifteen minutes."
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - {Name: InstanceId, Value: !Ref DemoInstanceId}
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: !Ref CpuThresholdPercent
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-high-cpu}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  MemoryPressureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-low-memory
+      AlarmDescription: !Sub "Available host memory remained below ${MemoryAvailableThresholdPercent} percent for five minutes, or memory telemetry stopped."
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: CWAgent
+      MetricName: mem_available_percent
+      Dimensions:
+        - {Name: InstanceId, Value: !Ref DemoInstanceId}
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 5
+      Threshold: !Ref MemoryAvailableThresholdPercent
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-low-memory}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  InstanceStatusAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-instance-unresponsive
+      AlarmDescription: EC2 instance or system status checks failed for two minutes.
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - {Name: InstanceId, Value: !Ref DemoInstanceId}
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-instance-unresponsive}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  PublicHealthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-public-health-failed
+      AlarmDescription: Global Route53 health check could not reach the public HTTPS health endpoint.
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/Route53
+      MetricName: HealthCheckStatus
+      Dimensions:
+        - {Name: HealthCheckId, Value: !Ref PublicHealthCheck}
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-public-health-failed}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: demo-eacl-datahike
+      DashboardBody: !Sub |
+        {
+          "start": "-PT6H",
+          "periodOverride": "inherit",
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "CPU and credits",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/EC2", "CPUUtilization", "InstanceId", "${DemoInstanceId}", {"stat": "Average", "period": 300}],
+                  [".", "CPUCreditBalance", ".", ".", {"stat": "Average", "period": 300, "yAxis": "right"}]
+                ],
+                "yAxis": {"left": {"min": 0, "max": 100}, "right": {"min": 0}}
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Available memory",
+                "region": "${AWS::Region}",
+                "metrics": [["CWAgent", "mem_available_percent", "InstanceId", "${DemoInstanceId}", {"stat": "Average", "period": 60}]],
+                "yAxis": {"left": {"min": 0, "max": 100}}
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 6, "width": 24, "height": 6,
+              "properties": {
+                "title": "Instance and public health",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/EC2", "StatusCheckFailed", "InstanceId", "${DemoInstanceId}", {"stat": "Maximum", "period": 60}],
+                  ["AWS/Route53", "HealthCheckStatus", "HealthCheckId", "${PublicHealthCheck}", {"stat": "Minimum", "period": 60}]
+                ],
+                "yAxis": {"left": {"min": 0, "max": 1}}
+              }
+            }
+          ]
+        }
+
+Outputs:
+  AlarmTopicArn: {Value: !Ref AlarmTopic}
+  DashboardName: {Value: !Ref MonitoringDashboard}
+  HealthCheckId: {Value: !Ref PublicHealthCheck}
+  NotifierFunctionName: {Value: !Ref NotifierFunction}
+  TelegramSecretArn: {Value: !Ref TelegramBotToken}
