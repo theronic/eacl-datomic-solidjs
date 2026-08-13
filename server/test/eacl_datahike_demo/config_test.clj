@@ -100,6 +100,18 @@
              :answer-max-weight (* 16 1024 1024)
              :managed-proof-max-atoms 256}}
            (:cache (system/client-options config/default-config)))))
+  (testing "durable stores keep one cursor lifecycle across process restarts"
+    (let [store-id (random-uuid)
+          options (system/client-options
+                   (assoc config/default-config
+                          :store-backend :file
+                          :store-id store-id))]
+      (is (= {:application :eacl-datahike-demo
+              :store-backend :file
+              :store-id (str store-id)}
+             (:source-lifecycle options)))
+      (is (not (contains? (system/client-options config/default-config)
+                          :source-lifecycle)))))
   (testing "production requires stable application secrets"
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo

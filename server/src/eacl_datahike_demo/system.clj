@@ -15,19 +15,29 @@
 
 (defonce !system (atom nil))
 
+(defn- durable-source-lifecycle
+  [{:keys [store-backend store-id]}]
+  (when (not= :memory store-backend)
+    {:application :eacl-datahike-demo
+     :store-backend store-backend
+     :store-id (str store-id)}))
+
 (defn client-options
   [{:keys [security-key request-timeout-ms cache-max-entries
            cache-projection-max-weight cache-denotation-max-weight
-           cache-answer-max-weight cache-managed-proof-max-atoms]}]
-  (cond-> {:cache {:max-entries cache-max-entries
-                   :admit-on-repeat? false
-                   :subproblem-cache
-                   {:projection-max-weight cache-projection-max-weight
-                    :denotation-max-weight cache-denotation-max-weight
-                    :answer-max-weight cache-answer-max-weight
-                    :managed-proof-max-atoms cache-managed-proof-max-atoms}}
-           :execution-timeout-ms request-timeout-ms}
-    security-key (assoc :security-key security-key)))
+           cache-answer-max-weight cache-managed-proof-max-atoms]
+    :as runtime-config}]
+  (let [source-lifecycle (durable-source-lifecycle runtime-config)]
+    (cond-> {:cache {:max-entries cache-max-entries
+                     :admit-on-repeat? false
+                     :subproblem-cache
+                     {:projection-max-weight cache-projection-max-weight
+                      :denotation-max-weight cache-denotation-max-weight
+                      :answer-max-weight cache-answer-max-weight
+                      :managed-proof-max-atoms cache-managed-proof-max-atoms}}
+             :execution-timeout-ms request-timeout-ms}
+      security-key (assoc :security-key security-key)
+      source-lifecycle (assoc :source-lifecycle source-lifecycle))))
 
 (defn- open-connection!
   [runtime-config]

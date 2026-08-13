@@ -63,6 +63,22 @@
              (get-in (support/response-body response) [:error :code])))
       (is (not (re-find #"internal" (:body response)))))))
 
+(deftest relay-cursor-failures-have-an-actionable-public-message
+  (support/with-test-system [system]
+    (let [response
+          (contracts/exception->response
+           system {:request-id "cursor-request"}
+           (ex-info "Invalid Relay cursor."
+                    {:type :eacl.pagination/invalid-cursor
+                     :reason :authentication-failed}))
+          body (support/response-body response)]
+      (is (= 409 (:status response)))
+      (is (= "invalid-cursor" (get-in body [:error :code])))
+      (is (= (str "This page cursor is no longer valid for the current "
+                  "query or deployment. Start again from the first page.")
+             (get-in body [:error :message])))
+      (is (not (re-find #"Relay" (:body response)))))))
+
 (deftest storage-failures-never-cross-the-api-boundary
   (support/with-test-system [system]
     (let [secret "AKIA-DO-NOT-DISCLOSE"

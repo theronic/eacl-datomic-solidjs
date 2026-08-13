@@ -21,7 +21,14 @@
                 :security-key "0123456789abcdef0123456789abcdef"})
         first-system (system/build-system runtime-config)
         database-config (:config (d/db (:conn first-system)))
-        first-revision (runtime/revision first-system)]
+        first-revision (runtime/revision first-system)
+        first-page (support/request
+                    (:handler first-system)
+                    :post
+                    "/api/eacl/lookup-resources"
+                    support/lookup-resources-body)
+        first-page-cursor (get-in (support/data first-page)
+                                  [:pageInfo :endCursor])]
     (try
       (testing "first boot creates and seeds once"
         (is (true? (:database-created? first-system)))
@@ -54,6 +61,16 @@
                      :permission "view"
                      :cache false}))
                   [:allowed]))))
+          (testing "a cursor minted before reconnect continues on the same store"
+            (let [second-page
+                  (support/request
+                   (:handler second-system)
+                   :post
+                   "/api/eacl/lookup-resources"
+                   (assoc support/lookup-resources-body
+                          :after first-page-cursor))]
+              (is (= 200 (:status second-page)))
+              (is (seq (:items (support/data second-page))))))
           (testing "re-running fixture installation is idempotent"
             (data/install-demo! (:conn second-system) (:acl second-system))
             (is (= 48 (data/count-servers (d/db (:conn second-system)))))

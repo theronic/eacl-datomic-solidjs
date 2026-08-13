@@ -43,6 +43,7 @@ test.describe.serial("real Datahike-backed explorer", () => {
   test("pagination retains the current page while the requested page loads", async ({
     page,
   }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
     let releaseFailure: () => void = () => undefined;
     const failureGate = new Promise<void>((resolve) => {
       releaseFailure = resolve;
@@ -75,16 +76,25 @@ test.describe.serial("real Datahike-backed explorer", () => {
     const firstPageText = await firstPageResource.textContent();
     await serverGroup.getByRole("button", { name: "Next" }).click();
 
-    await expect(serverGroup.getByText("Loading page 2…")).toBeVisible();
     await expect(serverGroup.locator(".group-card__page-stats"))
-      .toContainText("Loading page 2…");
+      .toContainText("1–20");
     await expect(serverGroup.getByText("Page 1")).toBeVisible();
     await expect(serverGroup.locator(".resource-tree")).toBeVisible();
     if (firstPageText) await expect(serverGroup.getByText(firstPageText.trim())).toBeVisible();
     const pendingNext = serverGroup.getByRole("button", { name: "Next" });
     await expect(pendingNext).toBeDisabled();
     await expect(pendingNext).toHaveAttribute("aria-busy", "true");
-    await expect(pendingNext.locator(".button-spinner")).toBeVisible();
+    const spinner = pendingNext.locator(".button-spinner");
+    await expect(spinner).toBeVisible();
+    await expect(spinner).toHaveCSS("animation-name", "eacl-spin");
+    await expect(spinner).toHaveCSS("animation-duration", "0.65s");
+    await expect(spinner).toHaveCSS("animation-iteration-count", "infinite");
+    const initialTransform = await spinner.evaluate(
+      (element) => getComputedStyle(element).transform,
+    );
+    await expect.poll(
+      () => spinner.evaluate((element) => getComputedStyle(element).transform),
+    ).not.toBe(initialTransform);
 
     releaseFailure();
     await expect(serverGroup.getByText("Injected unreliable-backend timeout"))

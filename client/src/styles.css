@@ -1251,13 +1251,6 @@ button {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .button-spinner,
-  .loading-dot {
-    animation-duration: 1.8s;
-  }
-}
-
 @keyframes eacl-pulse {
   to {
     opacity: 0.3;
@@ -1412,6 +1405,11 @@ button {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .button-spinner {
+    animation-duration: 650ms !important;
+    animation-iteration-count: infinite !important;
   }
 }
 

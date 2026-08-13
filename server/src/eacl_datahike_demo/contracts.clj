@@ -291,6 +291,9 @@
                  "internal-error")
         safe-message (cond
                        cancelled? "The client cancelled the request."
+                       (and cursor-error? (= 409 status))
+                       (str "This page cursor is no longer valid for the current "
+                            "query or deployment. Start again from the first page.")
                        (>= status 500)
                        "The server could not complete the request."
                        :else message)]
