@@ -14,10 +14,34 @@ application host.
 | Memory pressure | `CWAgent mem_available_percent` | below 20% for five 1-minute periods; missing telemetry also breaches |
 | Instance unresponsive | `AWS/EC2 StatusCheckFailed` | at least 1 for two 1-minute periods |
 | Public service unavailable | Route53 HTTPS health check of `/datahike/api/health` | unhealthy for three 1-minute periods |
+| S3 GET warning / critical | `AWS/S3 GetRequests`, scoped to the Datahike object prefix | 10,417 / 31,250 in one 5-minute period |
+| S3 PUT warning / critical | `AWS/S3 PutRequests`, scoped to the Datahike object prefix | 834 / 2,500 in one 5-minute period |
+| Capacity controller failure | `AWS/Lambda Errors` for the controller | at least 1 in one minute |
 
 Each alarm sends both `ALARM` and `OK` transitions through SNS to a small
-Lambda notifier. A CloudWatch dashboard graphs CPU, credits, memory, instance
-status, and public endpoint status.
+Lambda notifier. A separate controller consumes the same topic but acts only
+on `ALARM` transitions from the two critical S3 request alarms. It uses SSM to
+put the host into sticky capacity mode; see [cost-controls.md](cost-controls.md).
+A CloudWatch dashboard graphs CPU, credits, memory, instance status, public
+endpoint status, and scoped S3 requests.
+
+The controller waits for the SSM command to finish successfully. A failed or
+unconfirmed command fails the Lambda event, which is retried twice for up to
+one hour. The separate controller-error alarm sends Telegram `ALARM` and `OK`
+transitions so a failed circuit breaker cannot be mistaken for a successful
+suspension.
+
+At the current `us-east-1` rates of `$0.0004/1,000` GETs and `$0.005/1,000`
+PUTs, either warning threshold is a `$0.05/hour` or `$36.50/month` request-cost
+run rate if continuous. Either critical threshold is `$0.15/hour` or
+`$109.50/month`. The warning GET threshold is about 2.6 canonical cold pages
+within five minutes at the observed 3,935 GETs per page. These are run-rate
+alarms, not billing totals, and S3 documents request metrics as near-real-time
+best-effort telemetry rather than complete billing records.
+
+The application stack owns one S3 request-metrics configuration named
+`DatahikeStore`. It filters on `<store-id>_`, so unrelated bucket-management
+requests and any future non-Datahike objects do not affect the alarms.
 
 ## Secret handling
 
@@ -47,8 +71,9 @@ the destination.
 
 ## Deployment gate
 
-Create the stack initially with `AlarmActionsEnabled=false`, insert the token,
-and install the pinned arm64 CloudWatch Agent:
+Create the stack initially with both `AlarmActionsEnabled=false` and
+`CapacityActionsEnabled=false`, insert the token, and install the pinned arm64
+CloudWatch Agent:
 
 ```bash
 infra/scripts/install-cloudwatch-agent.sh "$EACL_INSTANCE_HOST" \
@@ -58,7 +83,9 @@ infra/scripts/install-cloudwatch-agent.sh "$EACL_INSTANCE_HOST" \
 Inspect the CloudFormation change set before execution. The monitoring stack
 must contain no `AWS::EC2::Instance`, EIP, S3 bucket, or Route53 record. Update
 the stack with `AlarmActionsEnabled=true` only after the memory metric and
-Telegram destination are ready.
+Telegram destination are ready. Install and test the SSM control path before
+separately setting `CapacityActionsEnabled=true` as documented in
+[cost-controls.md](cost-controls.md).
 
 ## Acceptance test
 
@@ -82,6 +109,9 @@ aws --profile 843761893873_Petrus_Prod --region us-east-1 \
 
 aws --profile 843761893873_Petrus_Prod --region us-east-1 \
   logs tail /aws/lambda/demo-eacl-datahike-telegram-notifier --since 1h
+
+aws --profile 843761893873_Petrus_Prod --region us-east-1 \
+  logs tail /aws/lambda/demo-eacl-datahike-capacity-controller --since 1h
 ```
 
 Rotate the bot token by passing the replacement to
@@ -90,10 +120,15 @@ retains the secret on monitoring-stack deletion to prevent accidental
 credential loss, so final teardown must explicitly schedule its deletion.
 
 Gross monthly list-price exposure before account-level free tiers is about
-`$5.20`: five standard alarms (`$0.50`), one custom memory metric (`$0.30`),
+`$5.70`: ten standard alarms (`$1.00`), one custom memory metric (`$0.30`),
 one dashboard (`$3.00`), one Secrets Manager secret (`$0.40`), and the HTTPS
 health-check feature (`$1.00`). This account currently has two dashboards and
-one metric alarm, so the third dashboard and five added alarm metrics fit the
-published CloudWatch free tier; if the custom-metric allowance is also unused,
-expected incremental recurring cost is about `$1.40` plus negligible SNS,
-Lambda, Secrets Manager API, and 14-day notifier-log usage.
+two pre-existing metric alarms. The demo's ten alarms bring the account to
+twelve alarm metrics, so two are expected to be billable at about `$0.20/month`.
+S3 emits only the request-metric series applicable to operations that occur;
+successful GET/PUT/LIST/HEAD traffic is expected to keep the combined custom
+metric count close to the ten-metric free allowance. Allow up to about
+`$0.60/month` if error or additional request series push two metrics beyond the
+allowance. Expected incremental recurring monitoring cost is therefore about
+`$1.60-$2.20`, plus negligible SNS, Lambda, Secrets Manager API, and 14-day
+notifier-log usage.

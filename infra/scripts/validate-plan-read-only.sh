@@ -30,6 +30,8 @@ fi
 
 aws_eacl cloudformation validate-template \
   --template-body "file://$repo_root/infra/cloudformation.yaml" >/dev/null
+aws_eacl cloudformation validate-template \
+  --template-body "file://$repo_root/infra/monitoring-cloudformation.yaml" >/dev/null
 aws_eacl cloudformation get-template-summary \
   --template-body "file://$repo_root/infra/cloudformation.yaml" \
   --query '{ResourceTypes:ResourceTypes,Parameters:Parameters[].ParameterKey}'
@@ -48,6 +50,12 @@ test "$bucket_http" = 404 || {
 
 docker run --rm --env EACL_BACKEND=127.0.0.1:8088 \
   --volume "$repo_root/infra/caddy/Caddyfile.http:/etc/caddy/Caddyfile:ro" \
+  caddy:2.11.4-alpine caddy validate --config /etc/caddy/Caddyfile
+docker run --rm --env EACL_SITE_ADDRESS=demo.invalid \
+  --volume "$repo_root/infra/caddy/Caddyfile.https:/etc/caddy/Caddyfile:ro" \
+  caddy:2.11.4-alpine caddy validate --config /etc/caddy/Caddyfile
+docker run --rm --env EACL_SITE_ADDRESS=demo.invalid \
+  --volume "$repo_root/infra/caddy/Caddyfile.capacity:/etc/caddy/Caddyfile:ro" \
   caddy:2.11.4-alpine caddy validate --config /etc/caddy/Caddyfile
 
 echo "read-only plan validation passed; no AWS resources were created or modified"

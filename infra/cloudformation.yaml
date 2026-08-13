@@ -111,6 +111,9 @@ Resources:
           - Id: expire-noncurrent-after-seven-days
             Status: Enabled
             NoncurrentVersionExpiration: {NoncurrentDays: 7}
+      MetricsConfigurations:
+        - Id: DatahikeStore
+          Prefix: !Sub "${StoreId}_"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true

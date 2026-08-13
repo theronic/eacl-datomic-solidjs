@@ -61,6 +61,14 @@ systemctl reload ssh
 install -o root -g eacl-datahike-demo -m 0640 \
   "$infra_dir/systemd/eacl-datahike-demo.env.example" \
   /etc/eacl-datahike-demo/eacl-datahike-demo.env.example
+install -o root -g root -m 0644 "$infra_dir/caddy/Caddyfile.https" \
+  /etc/eacl-datahike-demo/Caddyfile.https
+install -o root -g root -m 0644 "$infra_dir/caddy/Caddyfile.capacity" \
+  /etc/eacl-datahike-demo/Caddyfile.capacity
+install -o root -g root -m 0755 "$infra_dir/scripts/eacl-capacity-suspend" \
+  /usr/local/sbin/eacl-capacity-suspend
+install -o root -g root -m 0755 "$infra_dir/scripts/eacl-capacity-resume" \
+  /usr/local/sbin/eacl-capacity-resume
 install -o root -g root -m 0644 "$infra_dir/caddy/Caddyfile.http" /etc/caddy/Caddyfile
 caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload

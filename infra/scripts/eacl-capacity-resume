@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+test "$(id -u)" -eq 0 || { echo "run as root" >&2; exit 1; }
+
+normal_config=/etc/eacl-datahike-demo/Caddyfile.https
+active_config=/etc/caddy/Caddyfile
+marker=/etc/eacl-datahike-demo/capacity-suspended
+test -f "$normal_config"
+
+site_address="$(systemctl show caddy --property=Environment --value | tr ' ' '\n' | sed -n 's/^EACL_SITE_ADDRESS=//p' | head -n 1)"
+[[ "$site_address" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
+EACL_SITE_ADDRESS="$site_address" caddy validate --config "$normal_config"
+
+systemctl start eacl-datahike-demo
+healthy=false
+for _ in $(seq 1 180); do
+  if curl --fail --silent --max-time 2 \
+      http://127.0.0.1:8088/api/health >/dev/null; then
+    healthy=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "$healthy" != true ]; then
+  systemctl stop eacl-datahike-demo
+  echo "application did not become healthy; capacity mode remains active" >&2
+  exit 1
+fi
+
+install -o root -g root -m 0644 "$normal_config" "$active_config"
+if ! systemctl reload caddy; then
+  systemctl stop eacl-datahike-demo
+  echo "Caddy reload failed; application stopped and capacity mode retained" >&2
+  exit 1
+fi
+if [ -e "$marker" ]; then
+  unlink -- "$marker"
+fi
+
+systemctl is-active --quiet caddy
+systemctl is-active --quiet eacl-datahike-demo
+echo "normal service restored"

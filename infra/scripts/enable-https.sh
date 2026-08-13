@@ -13,7 +13,10 @@ printf '[Service]\nEnvironment=EACL_SITE_ADDRESS=%s\n' "$site_address" >"$drop_i
 install -d -o root -g root -m 0755 /etc/systemd/system/caddy.service.d
 install -o root -g root -m 0644 "$drop_in" \
   /etc/systemd/system/caddy.service.d/eacl-site.conf
-install -o root -g root -m 0644 "$source_file" /etc/caddy/Caddyfile
+install -o root -g root -m 0644 "$source_file" \
+  /etc/eacl-datahike-demo/Caddyfile.https
+install -o root -g root -m 0644 /etc/eacl-datahike-demo/Caddyfile.https \
+  /etc/caddy/Caddyfile
 EACL_SITE_ADDRESS="$site_address" caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload
 systemctl restart caddy
