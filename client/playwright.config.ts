@@ -7,7 +7,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: process.env.EACL_SOLIDJS_E2E_URL ?? "http://127.0.0.1:8089",
+    baseURL: process.env.EACL_DATAHIKE_DEMO_E2E_URL ?? "http://127.0.0.1:8089",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },

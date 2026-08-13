@@ -51,6 +51,11 @@ export const bootstrap: Bootstrap = {
   ],
   pageSizeOptions: [10, 20, 50, 100, 250, 500, 1000],
   defaultPageSize: 20,
+  capabilities: {
+    schemaWrite: true,
+    seedWrite: true,
+    cacheEvict: true,
+  },
 };
 
 export const cacheSnapshot: CacheSnapshot = {
@@ -59,7 +64,7 @@ export const cacheSnapshot: CacheSnapshot = {
   capturedAt: "2026-08-08T10:00:00Z",
 };
 
-export function success<T>(data: T, revision = "d100.c0"): ApiSuccess<T> {
+export function success<T>(data: T, revision = "h100.c0"): ApiSuccess<T> {
   return { data, meta: { revision, requestId: "test-request" } };
 }
 

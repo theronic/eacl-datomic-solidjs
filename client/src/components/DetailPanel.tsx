@@ -9,6 +9,7 @@ import {
   type JSX,
 } from "solid-js";
 import { ApiError, LatestRequest } from "../api";
+import { formatInteger } from "../format";
 import { useAppState } from "../state";
 import type { ApiSuccess, EaclObject, ObjectPage } from "../types";
 import {
@@ -52,6 +53,22 @@ function PermissionSubjects(props: {
       }),
     }),
   );
+  const [displayedSubjects, setDisplayedSubjects] =
+    createSignal<ApiSuccess<ObjectPage>>();
+  const [displayedCursors, setDisplayedCursors] = createSignal<string[]>([]);
+  const [pendingAction, setPendingAction] =
+    createSignal<"first" | "previous" | "next">();
+
+  createEffect(() => {
+    if (subjects.loading || subjects.error) return;
+    const envelope = subjects();
+    if (!envelope) return;
+    setDisplayedSubjects(envelope);
+    setDisplayedCursors([...cursors()]);
+  });
+  createEffect(() => {
+    if (!subjects.loading) setPendingAction(undefined);
+  });
 
   createEffect(
     on(
@@ -66,41 +83,74 @@ function PermissionSubjects(props: {
       { defer: true },
     ),
   );
-  createEffect(() => {
-    const error = subjects.error;
-    if (error instanceof ApiError && error.code === "invalid-cursor" && cursors().length) {
-      setCursors([]);
-    }
-  });
   onCleanup(() => request.abort());
+  const settledSubjects = displayedSubjects;
+  const navigationAction = () => {
+    if (cursors().length > displayedCursors().length) return "next" as const;
+    if (!cursors().length && displayedCursors().length) return "first" as const;
+    if (cursors().length < displayedCursors().length) return "previous" as const;
+    return undefined;
+  };
+  const navigate = (
+    action: "first" | "previous" | "next",
+    nextCursors: string[],
+  ) => {
+    if (subjects.loading) return;
+    setPendingAction(action);
+    setCursors(nextCursors);
+  };
+  const retrySubjects = () => {
+    setPendingAction(navigationAction());
+    void refetch();
+  };
+  const subjectRecovery = () => {
+    if (!cursors().length) return undefined;
+    return subjects.error instanceof ApiError && subjects.error.code === "invalid-cursor"
+      ? { label: "First page", action: () => navigate("first", []) }
+      : {
+          label: "Previous page",
+          action: () => navigate("previous", displayedCursors().slice(0, -1)),
+        };
+  };
 
   return (
     <section class="panel-section permission-subjects">
       <div class="section-header">
         <p class="panel-label">:{props.permission}</p>
-        <MetaTiming meta={subjects()?.meta} />
+        <MetaTiming meta={settledSubjects()?.meta} />
       </div>
-      <Show when={subjects.loading && !subjects()}>
-        <LoadingBlock label="permission holders" />
+      <Show when={subjects.loading && !settledSubjects()}>
+        <LoadingBlock
+          label={`permission holders page ${formatInteger(cursors().length + 1)}`}
+        />
       </Show>
       <Show when={subjects.error}>
-        <ErrorBlock error={subjects.error} retry={() => void refetch()} />
+        <ErrorBlock
+          label={`Permission holders page ${formatInteger(cursors().length + 1)} failed`}
+          error={subjects.error}
+          retry={retrySubjects}
+          secondary={subjectRecovery()}
+        />
       </Show>
-      <Show when={subjects()}>
+      <Show when={settledSubjects()}>
         {(envelope: () => ApiSuccess<ObjectPage>) => (
           <>
             <Pagination
-              page={cursors().length + 1}
-              canPrevious={cursors().length > 0}
+              page={displayedCursors().length + 1}
+              canPrevious={displayedCursors().length > 0}
               canNext={envelope().data.pageInfo.hasNextPage}
-              first={() => setCursors([])}
-              previous={() => setCursors((value) => value.slice(0, -1))}
+              busy={subjects.loading}
+              busyAction={pendingAction()}
+              first={() => navigate("first", [])}
+              previous={() =>
+                navigate("previous", displayedCursors().slice(0, -1))
+              }
               next={() => {
                 const next = envelope().data.pageInfo.endCursor;
-                if (next) setCursors((value) => [...value, next]);
+                if (next) navigate("next", [...displayedCursors(), next]);
               }}
             />
-            <div class="list-stack">
+            <div class="list-stack" aria-busy={subjects.loading}>
               <For
                 each={envelope().data.items}
                 fallback={<EmptyState>No subjects found.</EmptyState>}
@@ -134,7 +184,7 @@ export function DetailPanel(): JSX.Element {
   const permissions = () => {
     const selected = app.selectedResource();
     if (!selected) return [];
-    return app.bootstrap()?.data.schema.permissionsByType[selected.type] ?? [];
+    return app.bootstrapData()?.data.schema.permissionsByType[selected.type] ?? [];
   };
 
   return (

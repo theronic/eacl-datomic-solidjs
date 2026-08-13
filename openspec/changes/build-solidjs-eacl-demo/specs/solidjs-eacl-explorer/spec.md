@@ -53,11 +53,23 @@ The subjects panel SHALL display quick subjects, a bounded known-subject page, s
 - **THEN** the client selects the first remaining valid permission or an explicit no-permission state before issuing replacement queries
 
 ### Requirement: Cursor-paginated authorized resource tree
-The resources panel SHALL group authorized resources by schema-derived type, fetch EACL page and exact count results independently, render stable keyed items, and support first, previous, and next navigation with opaque cursor stacks.
+The resources panel SHALL group authorized resources by schema-derived type, fetch EACL page and demand-bounded count results independently, render stable keyed items, and support first, previous, and next navigation with opaque cursor stacks. Each count SHALL start at `countLimit: 50000`; a truncated total SHALL render with `+` as a button whose activation doubles only that group's limit until EACL reports exhaustion.
 
 #### Scenario: Expand a resource type
 - **WHEN** the user expands a resource-type group
-- **THEN** the client fetches its first authorized page and one independent exact count, displays `range (page timing/status) of total (count timing/status)` with the total exactly once, and renders no more than the selected page size
+- **THEN** the client fetches its first authorized page and one independent count bounded at 50,000, displays `range (page timing/status) of total (count timing/status)` with a truncated total such as `50k+` exactly once, and renders no more than the selected page size
+
+#### Scenario: Increase a truncated total
+- **WHEN** the user activates a truncated count such as `50k+`
+- **THEN** only that count resource refetches with double its prior `countLimit`, the page and other groups remain stable, and the prior count remains visible while the request is pending
+
+#### Scenario: Reach an exact total
+- **WHEN** a count response reports `truncated: false`
+- **THEN** the UI renders the exact formatted total as non-clickable text and performs no further count work without a semantic query change
+
+#### Scenario: Reset count demand for a new query
+- **WHEN** subject, permission, cache mode, data revision, or schema revision changes
+- **THEN** the affected group's count limit resets to 50,000 before its replacement request, while a page-size or cursor-only change does not refetch or widen the count
 
 #### Scenario: Collapse a resource type
 - **WHEN** the user collapses a resource-type group
@@ -65,11 +77,11 @@ The resources panel SHALL group authorized resources by schema-derived type, fet
 
 #### Scenario: Navigate to next page
 - **WHEN** a group has a next cursor and the user clicks next
-- **THEN** only that group's page resource requests the cursor continuation while its exact count and other groups remain stable
+- **THEN** only that group's page resource requests the cursor continuation while its bounded-or-exact count and other groups remain stable
 
 #### Scenario: Update independent pagination timing
 - **WHEN** a new resource page is pending or replaces the prior page
-- **THEN** only the range and page timing fragment updates while the exact count and its timing/cache provenance retain the same Solid DOM fragment without flashing
+- **THEN** the last successful page, committed page number, pagination controls, count, and timing provenance remain visible while the initiating pagination button shows an in-place spinner, and the new page number, range, timing, and results publish together only after success
 
 #### Scenario: Recover from invalid cursor
 - **WHEN** a page request returns the API's `invalid-cursor` conflict
@@ -143,7 +155,7 @@ The cache segment SHALL include cache enablement, **Evict Cache**, and **Refresh
 - **THEN** the cache segment reports the refresh error while retaining the last successful snapshot for inspection
 
 ### Requirement: Focused asynchronous states and recovery
-Each independently fetched branch SHALL expose accessible pending, refreshing, empty, and error feedback without replacing the entire explorer or discarding its last successful unrelated data.
+Each independently fetched branch SHALL expose accessible pending, refreshing, empty, and error feedback without replacing the entire explorer or discarding its last successful data.
 
 #### Scenario: One group request fails
 - **WHEN** one resource group returns an API error while other groups succeed
@@ -151,7 +163,7 @@ Each independently fetched branch SHALL expose accessible pending, refreshing, e
 
 #### Scenario: Refetch a populated branch
 - **WHEN** an existing branch refetches because an input changed
-- **THEN** the UI distinguishes focused refresh from first load and avoids a whole-page loading flash
+- **THEN** the UI retains the last successful branch, distinguishes focused refresh from first load, keeps its controls mounted, and shows an in-place spinner on the initiating control without a whole-page loading flash
 
 ### Requirement: Seed controls and progress
 The header SHALL provide a validated positive server-count input and **Seed DB** action, SHALL keep the explorer mounted while seeding, and SHALL poll bounded progress/revision state so visible authorization queries can continue and react to each committed Datomic basis.

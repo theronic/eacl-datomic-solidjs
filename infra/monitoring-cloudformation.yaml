@@ -1,0 +1,797 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Monitoring and Telegram alarms for the EACL v8 Datahike demo.
+
+Parameters:
+  DemoInstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: Existing EACL Datahike demo instance to monitor.
+  DemoInstanceRoleName:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9_+=,.@-]{1,128}$"
+    Description: Existing EC2 role that receives metric-only CloudWatch access.
+  DataBucketName:
+    Type: String
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+    Description: Existing dedicated Datahike bucket whose request costs are monitored.
+  S3MetricFilterId:
+    Type: String
+    Default: DatahikeStore
+    AllowedPattern: "^[A-Za-z0-9._-]{1,64}$"
+    Description: S3 request-metrics configuration ID scoped to the Datahike store prefix.
+  PublicHostname:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])$"
+    Description: Public hostname checked over HTTPS, without a trailing dot.
+  TelegramChatId:
+    Type: String
+    AllowedPattern: "^-?[0-9]+$"
+    Description: Numeric Telegram destination; it is an identifier, not a credential.
+  AlarmActionsEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Keep false until the secret, agent, and destination are verified.
+  CapacityActionsEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Keep false until the host controls and SSM agent pass their acceptance test.
+  CpuCreditThreshold:
+    Type: Number
+    Default: 24
+    MinValue: 0
+  CpuThresholdPercent:
+    Type: Number
+    Default: 85
+    MinValue: 1
+    MaxValue: 100
+  MemoryAvailableThresholdPercent:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    MaxValue: 99
+  S3GetWarningPerFiveMinutes:
+    Type: Number
+    Default: 10417
+    MinValue: 1
+    Description: GETs costing about $0.00417 per five minutes or $36.50/month if sustained.
+  S3GetCriticalPerFiveMinutes:
+    Type: Number
+    Default: 31250
+    MinValue: 1
+    Description: GETs costing $0.0125 per five minutes or $109.50/month if sustained.
+  S3PutWarningPerFiveMinutes:
+    Type: Number
+    Default: 834
+    MinValue: 1
+    Description: PUTs costing about $0.00417 per five minutes or $36.50/month if sustained.
+  S3PutCriticalPerFiveMinutes:
+    Type: Number
+    Default: 2500
+    MinValue: 1
+    Description: PUTs costing $0.0125 per five minutes or $109.50/month if sustained.
+
+Conditions:
+  AlertsEnabled: !Equals [!Ref AlarmActionsEnabled, "true"]
+
+Resources:
+  TelegramBotToken:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: demo/eacl/datahike/telegram
+      Description: Telegram bot token for EACL Datahike CloudWatch notifications.
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-telegram}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: demo-eacl-datahike-alarms
+      DisplayName: EACL Datahike alarms
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-alarms}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  NotifierRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: demo-eacl-datahike-telegram-notifier
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-only-telegram-token
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref TelegramBotToken
+        - PolicyName: write-own-log-stream
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt NotifierLogGroup.Arn
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-telegram-notifier}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  NotifierFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: NotifierLogGroup
+    Properties:
+      FunctionName: demo-eacl-datahike-telegram-notifier
+      Description: Sends EACL Datahike alarm transitions to Telegram.
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt NotifierRole.Arn
+      MemorySize: 128
+      Timeout: 15
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          TELEGRAM_SECRET_ARN: !Ref TelegramBotToken
+          TELEGRAM_CHAT_ID: !Ref TelegramChatId
+          DEMO_URL: !Sub "https://${PublicHostname}/datahike/"
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          import boto3
+
+
+          def render_message(raw_message):
+              try:
+                  alarm = json.loads(raw_message)
+              except (TypeError, json.JSONDecodeError):
+                  return str(raw_message)
+              if not isinstance(alarm, dict) or "AlarmName" not in alarm:
+                  return str(raw_message)
+              state = alarm.get("NewStateValue", "UNKNOWN")
+              marker = "RECOVERED" if state == "OK" else state
+              lines = [
+                  f"EACL Datahike {marker}",
+                  f"Alarm: {alarm['AlarmName']}",
+                  f"Reason: {alarm.get('NewStateReason', 'not supplied')}",
+                  f"Time: {alarm.get('StateChangeTime', 'unknown')}",
+                  f"Region: {alarm.get('Region', 'unknown')}",
+                  f"Demo: {os.environ['DEMO_URL']}",
+              ]
+              return "\n".join(lines)
+
+
+          def handler(event, context):
+              secret_arn = os.environ["TELEGRAM_SECRET_ARN"]
+              chat_id = os.environ["TELEGRAM_CHAT_ID"]
+              token = boto3.client("secretsmanager").get_secret_value(
+                  SecretId=secret_arn
+              )["SecretString"].strip()
+              if not token:
+                  raise RuntimeError("Telegram bot token secret is empty")
+
+              delivered = 0
+              for record in event.get("Records", []):
+                  sns = record.get("Sns", {})
+                  message = render_message(sns.get("Message", ""))[:3900]
+                  body = urllib.parse.urlencode({
+                      "chat_id": chat_id,
+                      "text": message,
+                      "disable_web_page_preview": "true",
+                  }).encode("utf-8")
+                  request = urllib.request.Request(
+                      f"https://api.telegram.org/bot{token}/sendMessage",
+                      data=body,
+                      headers={"Content-Type": "application/x-www-form-urlencoded"},
+                      method="POST",
+                  )
+                  try:
+                      with urllib.request.urlopen(request, timeout=10) as response:
+                          accepted = json.loads(response.read().decode("utf-8"))
+                  except Exception as error:
+                      status = getattr(error, "code", "network-error")
+                      raise RuntimeError(
+                          f"Telegram delivery failed with status {status}"
+                      ) from None
+                  if not accepted.get("ok"):
+                      raise RuntimeError("Telegram rejected the notification")
+                  delivered += 1
+                  print(
+                      "delivered telegram notification "
+                      f"sns_message_id={sns.get('MessageId', 'unknown')}"
+                  )
+              token = None
+              return {"delivered": delivered}
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-telegram-notifier}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  NotifierLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/demo-eacl-datahike-telegram-notifier
+      RetentionInDays: 14
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-telegram-notifier}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  AllowSnsToInvokeNotifier:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref NotifierFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref AlarmTopic
+
+  TelegramSubscription:
+    Type: AWS::SNS::Subscription
+    DependsOn: AllowSnsToInvokeNotifier
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: lambda
+      Endpoint: !GetAtt NotifierFunction.Arn
+
+  CapacityControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: demo-eacl-datahike-capacity-controller
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: suspend-exact-demo-instance
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${DemoInstanceId}"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${CapacitySuspendDocument}"
+              - Effect: Allow
+                Action: ssm:GetCommandInvocation
+                Resource: "*"
+        - PolicyName: write-own-log-stream
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt CapacityControllerLogGroup.Arn
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-capacity-controller}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  CapacityControllerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: CapacityControllerLogGroup
+    Properties:
+      FunctionName: demo-eacl-datahike-capacity-controller
+      Description: Suspends the demo when a critical Datahike S3 request alarm fires.
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt CapacityControllerRole.Arn
+      MemorySize: 128
+      Timeout: 30
+      Architectures: [arm64]
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          CAPACITY_ACTIONS_ENABLED: !Ref CapacityActionsEnabled
+          CAPACITY_DOCUMENT_NAME: !Ref CapacitySuspendDocument
+          DEMO_INSTANCE_ID: !Ref DemoInstanceId
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import time
+
+          import boto3
+          from botocore.exceptions import ClientError
+
+
+          CRITICAL_ALARMS = {
+              "demo-eacl-datahike-s3-get-cost-critical",
+              "demo-eacl-datahike-s3-put-cost-critical",
+          }
+          TERMINAL_FAILURES = {
+              "Cancelled",
+              "Cancelling",
+              "Failed",
+              "TimedOut",
+          }
+
+
+          def wait_for_success(ssm, command_id, instance_id):
+              for _ in range(20):
+                  try:
+                      result = ssm.get_command_invocation(
+                          CommandId=command_id,
+                          InstanceId=instance_id,
+                      )
+                  except ClientError as error:
+                      if error.response["Error"]["Code"] != "InvocationDoesNotExist":
+                          raise
+                      time.sleep(1)
+                      continue
+                  status = result["Status"]
+                  if status == "Success":
+                      return
+                  if status in TERMINAL_FAILURES:
+                      raise RuntimeError(
+                          f"capacity suspension command {command_id} ended {status}"
+                      )
+                  time.sleep(1)
+              raise RuntimeError(
+                  f"capacity suspension command {command_id} was not confirmed"
+              )
+
+
+          def handler(event, context):
+              if os.environ["CAPACITY_ACTIONS_ENABLED"] != "true":
+                  print("capacity actions disabled")
+                  return {"commands": 0, "disabled": True}
+
+              commands = 0
+              ssm = boto3.client("ssm")
+              for record in event.get("Records", []):
+                  sns = record.get("Sns", {})
+                  try:
+                      alarm = json.loads(sns.get("Message", ""))
+                  except (TypeError, json.JSONDecodeError):
+                      continue
+                  if not isinstance(alarm, dict):
+                      continue
+                  alarm_name = alarm.get("AlarmName")
+                  if (
+                      alarm.get("NewStateValue") != "ALARM"
+                      or alarm_name not in CRITICAL_ALARMS
+                  ):
+                      continue
+                  result = ssm.send_command(
+                      InstanceIds=[os.environ["DEMO_INSTANCE_ID"]],
+                      DocumentName=os.environ["CAPACITY_DOCUMENT_NAME"],
+                      TimeoutSeconds=120,
+                      Comment=f"Capacity suspension from {alarm_name}",
+                  )
+                  command_id = result["Command"]["CommandId"]
+                  print(
+                      "requested capacity suspension "
+                      f"alarm={alarm_name} command_id={command_id}"
+                  )
+                  wait_for_success(
+                      ssm,
+                      command_id,
+                      os.environ["DEMO_INSTANCE_ID"],
+                  )
+                  print(
+                      "confirmed capacity suspension "
+                      f"alarm={alarm_name} command_id={command_id}"
+                  )
+                  commands += 1
+              return {"commands": commands, "disabled": False}
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-capacity-controller}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  CapacityControllerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/demo-eacl-datahike-capacity-controller
+      RetentionInDays: 14
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-capacity-controller}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  CapacitySuspendDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: demo-eacl-datahike-capacity-suspend
+      DocumentType: Command
+      DocumentFormat: YAML
+      UpdateMethod: NewVersion
+      Content:
+        schemaVersion: "2.2"
+        description: Enter sticky capacity mode on the EACL Datahike demo.
+        mainSteps:
+          - action: aws:runShellScript
+            name: suspend
+            inputs:
+              runCommand:
+                - /usr/local/sbin/eacl-capacity-suspend
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-capacity-suspend}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  AllowSnsToInvokeCapacityController:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CapacityControllerFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref AlarmTopic
+
+  CapacityControllerSubscription:
+    Type: AWS::SNS::Subscription
+    DependsOn: AllowSnsToInvokeCapacityController
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: lambda
+      Endpoint: !GetAtt CapacityControllerFunction.Arn
+
+  CapacityControllerRetryPolicy:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref CapacityControllerFunction
+      Qualifier: $LATEST
+      MaximumEventAgeInSeconds: 3600
+      MaximumRetryAttempts: 2
+
+  InstanceMetricPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: eacl-datahike-cloudwatch-memory
+      Roles: [!Ref DemoInstanceRoleName]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: "*"
+            Condition:
+              StringEquals:
+                cloudwatch:namespace: CWAgent
+
+  InstanceManagementPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: eacl-datahike-ssm-control-channel
+      Roles: [!Ref DemoInstanceRoleName]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: ssm:UpdateInstanceInformation
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+            Resource: "*"
+
+  PublicHealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Properties:
+      HealthCheckConfig:
+        EnableSNI: true
+        FailureThreshold: 3
+        FullyQualifiedDomainName: !Ref PublicHostname
+        Port: 443
+        RequestInterval: 30
+        ResourcePath: /datahike/api/health
+        Type: HTTPS
+      HealthCheckTags:
+        - {Key: Name, Value: demo-eacl-datahike-public-health}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  CpuCreditAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-low-cpu-credits
+      AlarmDescription: T4g CPU credit balance remained at or below the reserve for ten minutes.
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/EC2
+      MetricName: CPUCreditBalance
+      Dimensions:
+        - {Name: InstanceId, Value: !Ref DemoInstanceId}
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: !Ref CpuCreditThreshold
+      ComparisonOperator: LessThanOrEqualToThreshold
+      TreatMissingData: missing
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-low-cpu-credits}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  HighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-high-cpu
+      AlarmDescription: !Sub "Average instance CPU remained at or above ${CpuThresholdPercent} percent for fifteen minutes."
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - {Name: InstanceId, Value: !Ref DemoInstanceId}
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: !Ref CpuThresholdPercent
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-high-cpu}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  MemoryPressureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-low-memory
+      AlarmDescription: !Sub "Available host memory remained below ${MemoryAvailableThresholdPercent} percent for five minutes, or memory telemetry stopped."
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: CWAgent
+      MetricName: mem_available_percent
+      Dimensions:
+        - {Name: InstanceId, Value: !Ref DemoInstanceId}
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 5
+      Threshold: !Ref MemoryAvailableThresholdPercent
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-low-memory}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  InstanceStatusAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-instance-unresponsive
+      AlarmDescription: EC2 instance or system status checks failed for two minutes.
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - {Name: InstanceId, Value: !Ref DemoInstanceId}
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-instance-unresponsive}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  PublicHealthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-public-health-failed
+      AlarmDescription: Global Route53 health check could not reach the public HTTPS health endpoint.
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/Route53
+      MetricName: HealthCheckStatus
+      Dimensions:
+        - {Name: HealthCheckId, Value: !Ref PublicHealthCheck}
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-public-health-failed}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  S3GetCostWarningAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-s3-get-cost-warning
+      AlarmDescription: !Sub "Datahike S3 GETs reached ${S3GetWarningPerFiveMinutes} in five minutes, a $36.50/month request-cost run rate if sustained."
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/S3
+      MetricName: GetRequests
+      Dimensions:
+        - {Name: BucketName, Value: !Ref DataBucketName}
+        - {Name: FilterId, Value: !Ref S3MetricFilterId}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: !Ref S3GetWarningPerFiveMinutes
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-s3-get-cost-warning}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  S3GetCostCriticalAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-s3-get-cost-critical
+      AlarmDescription: !Sub "Datahike S3 GETs reached ${S3GetCriticalPerFiveMinutes} in five minutes, a $109.50/month request-cost run rate if sustained."
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/S3
+      MetricName: GetRequests
+      Dimensions:
+        - {Name: BucketName, Value: !Ref DataBucketName}
+        - {Name: FilterId, Value: !Ref S3MetricFilterId}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: !Ref S3GetCriticalPerFiveMinutes
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-s3-get-cost-critical}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  S3PutCostWarningAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-s3-put-cost-warning
+      AlarmDescription: !Sub "Datahike S3 PUTs reached ${S3PutWarningPerFiveMinutes} in five minutes, a $36.50/month request-cost run rate if sustained."
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/S3
+      MetricName: PutRequests
+      Dimensions:
+        - {Name: BucketName, Value: !Ref DataBucketName}
+        - {Name: FilterId, Value: !Ref S3MetricFilterId}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: !Ref S3PutWarningPerFiveMinutes
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-s3-put-cost-warning}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  S3PutCostCriticalAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-s3-put-cost-critical
+      AlarmDescription: !Sub "Datahike S3 PUTs reached ${S3PutCriticalPerFiveMinutes} in five minutes, a $109.50/month request-cost run rate if sustained."
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/S3
+      MetricName: PutRequests
+      Dimensions:
+        - {Name: BucketName, Value: !Ref DataBucketName}
+        - {Name: FilterId, Value: !Ref S3MetricFilterId}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: !Ref S3PutCriticalPerFiveMinutes
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-s3-put-cost-critical}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  CapacityControllerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: demo-eacl-datahike-capacity-controller-failed
+      AlarmDescription: The automatic S3 cost circuit breaker failed and will be retried; inspect the controller and SSM command logs immediately.
+      ActionsEnabled: !If [AlertsEnabled, true, false]
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - {Name: FunctionName, Value: !Ref CapacityControllerFunction}
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - {Key: Name, Value: demo-eacl-datahike-capacity-controller-failed}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: demo-eacl-datahike
+      DashboardBody: !Sub |
+        {
+          "start": "-PT6H",
+          "periodOverride": "inherit",
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "CPU and credits",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/EC2", "CPUUtilization", "InstanceId", "${DemoInstanceId}", {"stat": "Average", "period": 300}],
+                  [".", "CPUCreditBalance", ".", ".", {"stat": "Average", "period": 300, "yAxis": "right"}]
+                ],
+                "yAxis": {"left": {"min": 0, "max": 100}, "right": {"min": 0}}
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Available memory",
+                "region": "${AWS::Region}",
+                "metrics": [["CWAgent", "mem_available_percent", "InstanceId", "${DemoInstanceId}", {"stat": "Average", "period": 60}]],
+                "yAxis": {"left": {"min": 0, "max": 100}}
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 6, "width": 24, "height": 6,
+              "properties": {
+                "title": "Instance and public health",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/EC2", "StatusCheckFailed", "InstanceId", "${DemoInstanceId}", {"stat": "Maximum", "period": 60}],
+                  ["AWS/Route53", "HealthCheckStatus", "HealthCheckId", "${PublicHealthCheck}", {"stat": "Minimum", "period": 60}]
+                ],
+                "yAxis": {"left": {"min": 0, "max": 1}}
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 12, "width": 24, "height": 6,
+              "properties": {
+                "title": "Datahike S3 requests per five minutes",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/S3", "GetRequests", "BucketName", "${DataBucketName}", "FilterId", "${S3MetricFilterId}", {"stat": "Sum", "period": 300}],
+                  [".", "PutRequests", ".", ".", ".", ".", {"stat": "Sum", "period": 300}]
+                ],
+                "yAxis": {"left": {"min": 0}}
+              }
+            }
+          ]
+        }
+
+Outputs:
+  AlarmTopicArn: {Value: !Ref AlarmTopic}
+  DashboardName: {Value: !Ref MonitoringDashboard}
+  HealthCheckId: {Value: !Ref PublicHealthCheck}
+  NotifierFunctionName: {Value: !Ref NotifierFunction}
+  CapacityControllerFunctionName: {Value: !Ref CapacityControllerFunction}
+  TelegramSecretArn: {Value: !Ref TelegramBotToken}

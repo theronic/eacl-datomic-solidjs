@@ -1,21 +1,20 @@
 {
-  "name": "eacl-solidjs",
+  "name": "eacl-datahike-demo",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "install:client": "npm --prefix client install",
     "dev:client": "npm --prefix client run dev",
-    "prep:local-eacl": "cd ../core/modules/eacl && clojure -T:build prep",
-    "dev:server": "cd server && EACL_SOLIDJS_HOST=127.0.0.1 EACL_SOLIDJS_DATOMIC_URI=datomic:mem://eacl-solidjs-dev clojure -M:run",
-    "dev:server:local-eacl": "cd server && EACL_SOLIDJS_HOST=127.0.0.1 EACL_SOLIDJS_DATOMIC_URI=datomic:mem://eacl-solidjs-dev clojure -M:local-eacl:run",
-    "dev:repl": "cd server && EACL_SOLIDJS_HOST=127.0.0.1 EACL_SOLIDJS_DATOMIC_URI=datomic:mem://eacl-solidjs-dev clojure -M:dev:nrepl",
-    "dev:repl:local-eacl": "cd server && EACL_SOLIDJS_HOST=127.0.0.1 EACL_SOLIDJS_DATOMIC_URI=datomic:mem://eacl-solidjs-dev clojure -M:local-eacl:dev:nrepl",
+    "dev:server": "cd server && clojure -M:run",
+    "dev:repl": "cd server && clojure -M:dev:nrepl",
     "start:server": "cd server && clojure -M:run",
-    "start:server:local-eacl": "cd server && clojure -M:local-eacl:run",
-    "build": "npm --prefix client run build",
+    "test:server": "cd server && clojure -M:test -m cognitect.test-runner",
+    "build:client": "npm --prefix client run build",
+    "build:server": "cd server && clojure -T:build uber",
+    "build": "npm run build:client && npm run build:server",
     "lint": "npm --prefix client run lint",
     "test:client": "npm --prefix client test",
     "test:e2e": "npm --prefix client run test:e2e",
-    "verify": "npm run lint && npm run test:client && npm run build"
+    "verify": "npm run lint && npm run test:client && npm run test:server && npm run build"
   }
 }

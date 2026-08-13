@@ -1,0 +1,54 @@
+{$EACL_SITE_ADDRESS} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Cache-Control "no-store"
+		X-EACL-Capacity-Mode true
+		-Server
+	}
+
+	route {
+		@root path /
+		redir @root /datahike/ 308
+
+		@missingSlash path /datahike
+		redir @missingSlash /datahike/ 308
+
+		@api path /datahike/api /datahike/api/*
+		header @api Content-Type "application/json; charset=utf-8"
+		respond @api `{"error":{"code":"capacity-exceeded","message":"The EACL Datahike demo is temporarily paused because its request capacity was exceeded. Please try again later."}}` 503
+
+		@demo path /datahike/*
+		header @demo Content-Type "text/html; charset=utf-8"
+		respond @demo <<HTML
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EACL Demo capacity exceeded</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { display: grid; min-height: 100vh; margin: 0; place-items: center; background: #111827; color: #f9fafb; }
+    main { box-sizing: border-box; max-width: 42rem; padding: 2rem; }
+    h1 { font-size: clamp(1.6rem, 5vw, 2.4rem); margin: 0 0 1rem; }
+    p { color: #d1d5db; font-size: 1.05rem; line-height: 1.6; }
+    code { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>EACL Demo capacity exceeded</h1>
+    <p>The Datahike demo has been temporarily paused to prevent unexpected S3 request charges.</p>
+    <p>No data was lost. Please try <code>demo.eacl.dev/datahike</code> again later.</p>
+  </main>
+</body>
+</html>
+HTML 503
+
+		respond 404
+	}
+}

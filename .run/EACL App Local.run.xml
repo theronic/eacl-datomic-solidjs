@@ -1,7 +1,0 @@
-<component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="EACL App (Local EACL)" type="CompoundRunConfigurationType">
-    <toRun name="EACL Server (Local EACL)" type="js.build_tools.npm" />
-    <toRun name="EACL Client" type="js.build_tools.npm" />
-    <method v="2" />
-  </configuration>
-</component>

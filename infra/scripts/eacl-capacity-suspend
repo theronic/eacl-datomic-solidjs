@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+test "$(id -u)" -eq 0 || { echo "run as root" >&2; exit 1; }
+
+capacity_config=/etc/eacl-datahike-demo/Caddyfile.capacity
+active_config=/etc/caddy/Caddyfile
+marker=/etc/eacl-datahike-demo/capacity-suspended
+test -f "$capacity_config"
+
+site_address="$(systemctl show caddy --property=Environment --value | tr ' ' '\n' | sed -n 's/^EACL_SITE_ADDRESS=//p' | head -n 1)"
+[[ "$site_address" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
+
+EACL_SITE_ADDRESS="$site_address" caddy validate --config "$capacity_config"
+install -o root -g root -m 0644 "$capacity_config" "$active_config"
+systemctl reload caddy
+systemctl stop eacl-datahike-demo
+install -o root -g root -m 0644 /dev/null "$marker"
+
+systemctl is-active --quiet caddy
+if systemctl is-active --quiet eacl-datahike-demo; then
+  echo "application remained active after capacity suspension" >&2
+  exit 1
+fi
+echo "capacity mode active; eacl-datahike-demo stopped"

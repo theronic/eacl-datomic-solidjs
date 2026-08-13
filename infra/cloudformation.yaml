@@ -1,0 +1,289 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Isolated EACL v8 Datahike demo (single writer, same-region S3 backend).
+
+Parameters:
+  OperatorCidr:
+    Type: String
+    Description: Approved public IPv4 CIDR allowed to reach key-authenticated SSH.
+    AllowedPattern: "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/(?:3[0-2]|[12]?[0-9])$"
+  SshPublicKey:
+    Type: String
+    Description: Operator OpenSSH public key material; never a private key.
+    MinLength: 40
+  SshKeyType:
+    Type: String
+    AllowedValues: [rsa, ed25519]
+  StoreId:
+    Type: String
+    AllowedPattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    Description: Stable non-secret Datahike store UUID used to scope IAM keys.
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+    AllowedValues: [t4g.medium, t4g.large]
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+  RootVolumeGiB:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 20
+  BucketName:
+    Type: String
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+  UbuntuAmi:
+    Type: AWS::EC2::Image::Id
+    Description: Approved arm64 Ubuntu 24.04 AMI resolved before stack creation.
+
+Resources:
+  DemoVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.80.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}.vpc"}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}.igw"}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DemoVpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: 10.80.1.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}.public"}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}.routes"}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+            BucketKeyEnabled: false
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-after-seven-days
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 7}
+      MetricsConfigurations:
+        - Id: DatahikeStore
+          Prefix: !Sub "${StoreId}_"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration: {Status: Enabled}
+      Tags:
+        - {Key: Name, Value: !Ref AWS::StackName}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub "${DataBucket.Arn}/*"
+            Condition: {Bool: {aws:SecureTransport: "false"}}
+
+  DatahikeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: exact-datahike-store-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BucketMetadata
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                Resource: !GetAtt DataBucket.Arn
+              - Sid: DedicatedBucketListing
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+              - Sid: ExactStoreObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub "${DataBucket.Arn}/${StoreId}_*"
+      Tags:
+        - {Key: Name, Value: !Ref AWS::StackName}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  DatahikeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref DatahikeRole]
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      VpcId: !Ref DemoVpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      RouteTableIds: [!Ref PublicRouteTable]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub "${DataBucket.Arn}/*"
+
+  ImportedKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub "${AWS::StackName}-operator"
+      KeyType: !Ref SshKeyType
+      PublicKeyMaterial: !Ref SshPublicKey
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-operator"}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP(S) and approved-CIDR SSH; Jetty and nREPL stay private.
+      VpcId: !Ref DemoVpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP and ACME}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS}
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref OperatorCidr
+          Description: Key-authenticated SSH
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Package, S3, DNS, and certificate access
+      Tags:
+        - {Key: Name, Value: !Ref AWS::StackName}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  DemoInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: [PublicDefaultRoute, S3GatewayEndpoint]
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      ImageId: !Ref UbuntuAmi
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref DatahikeInstanceProfile
+      KeyName: !Ref ImportedKeyPair
+      CreditSpecification: {CPUCredits: standard}
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+        HttpTokens: required
+        InstanceMetadataTags: disabled
+      Monitoring: false
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeleteOnTermination: true
+          DeviceIndex: "0"
+          GroupSet: [!Ref InstanceSecurityGroup]
+          SubnetId: !Ref PublicSubnet
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: !Ref RootVolumeGiB
+            VolumeType: gp3
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          install -d -m 0755 /opt/eacl-datahike-demo/releases
+          install -d -m 0750 /etc/eacl-datahike-demo
+          install -d -m 0750 /var/lib/eacl-datahike-demo
+      Tags:
+        - {Key: Name, Value: !Ref AWS::StackName}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+  DemoElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref DemoInstance
+      Tags:
+        - {Key: Name, Value: !Ref AWS::StackName}
+        - {Key: Project, Value: eacl-datahike-demo}
+
+Outputs:
+  BucketName: {Value: !Ref DataBucket}
+  ElasticIp: {Value: !Ref DemoElasticIp}
+  InstanceId: {Value: !Ref DemoInstance}
+  KeyPairName: {Value: !Ref ImportedKeyPair}
+  RoleArn: {Value: !GetAtt DatahikeRole.Arn}
+  StoreId: {Value: !Ref StoreId}
+  VpcId: {Value: !Ref DemoVpc}

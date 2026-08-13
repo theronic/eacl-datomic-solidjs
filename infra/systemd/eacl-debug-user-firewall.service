@@ -1,0 +1,15 @@
+[Unit]
+Description=Restrict the EACL diagnostic SSH user
+After=network-pre.target
+Before=network.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/eacl-debug-user-firewall apply
+ExecStop=/usr/local/sbin/eacl-debug-user-firewall remove
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+

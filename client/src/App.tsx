@@ -1,11 +1,12 @@
 import { Show, type JSX } from "solid-js";
 import { CachePanel } from "./components/CachePanel";
 import { DetailPanel } from "./components/DetailPanel";
-import { EmptyState, ErrorBlock, LoadingBlock } from "./components/Common";
+import { EmptyState, ErrorBlock, InlineLoading, LoadingBlock } from "./components/Common";
 import { Header } from "./components/Header";
 import { ResourceTreePanel } from "./components/ResourceTree";
 import { SchemaPanel } from "./components/SchemaPanel";
 import { SubjectsPanel } from "./components/SubjectsPanel";
+import { formatInteger } from "./format";
 import { useAppState } from "./state";
 
 function SeedProgress(): JSX.Element {
@@ -18,9 +19,10 @@ function SeedProgress(): JSX.Element {
   return (
     <section class="seed-progress-banner" aria-live="polite">
       <div class="seed-progress-banner__copy">
-        <strong>Seeding Datomic Pro</strong>
+        <strong>Seeding Datahike</strong>
         <span>
-          {progress()?.serversCompleted ?? 0} / {progress()?.serversTarget ?? 0} servers
+          {formatInteger(progress()?.serversCompleted ?? 0)} / {" "}
+          {formatInteger(progress()?.serversTarget ?? 0)} servers
         </span>
         <span class="seed-progress-card__label">
           {progress()?.label ?? "Applying managed EACL relationships"}
@@ -41,22 +43,50 @@ function SeedProgress(): JSX.Element {
 
 export function App(): JSX.Element {
   const app = useAppState();
+  const hasBootstrap = () => Boolean(app.bootstrapData());
   return (
     <div class="app-shell" data-theme={app.theme()}>
       <Header />
-      <Show when={app.bootstrap.loading && !app.bootstrap.error}>
+      <Show when={app.bootstrap.loading && !hasBootstrap()}>
         <main class="loading-grid">
           <LoadingBlock label="explorer" />
         </main>
       </Show>
-      <Show when={app.bootstrap.error}>
+      <Show when={app.bootstrap.error && !hasBootstrap()}>
         <main class="loading-grid">
-          <ErrorBlock error={app.bootstrap.error} retry={app.refetchBootstrap} />
+          <ErrorBlock
+            label="Explorer bootstrap failed"
+            error={app.bootstrap.error}
+            retry={app.refetchBootstrap}
+          />
         </main>
       </Show>
-      <Show when={!app.bootstrap.error && app.bootstrap()}>
+      <Show when={hasBootstrap()}>
+        <Show when={app.bootstrap.loading}>
+          <section class="request-status-banner">
+            <InlineLoading label="Refreshing explorer data" />
+          </section>
+        </Show>
+        <Show when={app.bootstrap.error}>
+          <section class="request-error-banner">
+            <ErrorBlock
+              label="Explorer refresh failed"
+              error={app.bootstrap.error}
+              retry={app.refetchBootstrap}
+            />
+          </section>
+        </Show>
         <Show when={app.seeding()}>
           <SeedProgress />
+        </Show>
+        <Show when={app.seedProgress()?.status === "error"}>
+          <section class="request-error-banner">
+            <ErrorBlock
+              label="Seed status request failed"
+              error={app.seedProgress()?.error ?? "Seed status is unavailable."}
+              retry={app.retrySeedPoll}
+            />
+          </section>
         </Show>
         <SchemaPanel />
         <CachePanel />
@@ -74,7 +104,7 @@ export function App(): JSX.Element {
       </Show>
       <footer class="app-footer">
         <p class="app-footer__copy">
-          EACL authorization runs on Datomic Pro; SolidJS receives only bounded HTTP
+          EACL authorization runs on Datahike; SolidJS receives only bounded HTTP
           results.
         </p>
         <Show when={!app.permission()}>

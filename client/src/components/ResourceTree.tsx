@@ -10,6 +10,7 @@ import {
   type JSX,
 } from "solid-js";
 import { ApiError, LatestRequest } from "../api";
+import { formatInteger, formatMilliseconds } from "../format";
 import { useAppState } from "../state";
 import type {
   ApiMeta,
@@ -21,9 +22,12 @@ import type {
   ResourceCount,
 } from "../types";
 import {
+  ButtonSpinner,
   DisclosureButton,
   EmptyState,
   ErrorBlock,
+  InlineError,
+  InlineLoading,
   LoadingBlock,
   MetaTiming,
   Pagination,
@@ -32,6 +36,7 @@ import {
 } from "./Common";
 
 const resourceKey = (resource: EaclObject) => `${resource.type}:${resource.id}`;
+const initialCountLimit = 50_000;
 
 function PaginationTiming(props: { meta?: ApiMeta }): JSX.Element {
   return (
@@ -39,7 +44,7 @@ function PaginationTiming(props: { meta?: ApiMeta }): JSX.Element {
       <span class="pagination-timing">
         <span aria-hidden="true">(</span>
         <Show when={props.meta?.elapsedMs !== undefined}>
-          <span>{props.meta?.elapsedMs?.toFixed(1)}ms</span>
+          <span>{formatMilliseconds(props.meta?.elapsedMs ?? 0)}ms</span>
         </Show>
         <Show when={props.meta?.cacheStatus}>
           {(status) => (
@@ -94,6 +99,22 @@ function RelationshipGroup(props: {
       }),
     }),
   );
+  const [displayedRelationships, setDisplayedRelationships] =
+    createSignal<ApiSuccess<RelationshipPage>>();
+  const [displayedCursors, setDisplayedCursors] = createSignal<string[]>([]);
+  const [pendingAction, setPendingAction] =
+    createSignal<"first" | "previous" | "next">();
+
+  createEffect(() => {
+    if (relationships.loading || relationships.error) return;
+    const envelope = relationships();
+    if (!envelope) return;
+    setDisplayedRelationships(envelope);
+    setDisplayedCursors([...cursors()]);
+  });
+  createEffect(() => {
+    if (!relationships.loading) setPendingAction(undefined);
+  });
 
   createEffect(
     on(
@@ -108,13 +129,37 @@ function RelationshipGroup(props: {
       { defer: true },
     ),
   );
-  createEffect(() => {
-    const error = relationships.error;
-    if (error instanceof ApiError && error.code === "invalid-cursor" && cursors().length) {
-      setCursors([]);
-    }
-  });
   onCleanup(() => request.abort());
+  const settledRelationships = displayedRelationships;
+  const navigationAction = () => {
+    if (cursors().length > displayedCursors().length) return "next" as const;
+    if (!cursors().length && displayedCursors().length) return "first" as const;
+    if (cursors().length < displayedCursors().length) return "previous" as const;
+    return undefined;
+  };
+  const navigate = (
+    action: "first" | "previous" | "next",
+    nextCursors: string[],
+  ) => {
+    if (relationships.loading) return;
+    setPendingAction(action);
+    setCursors(nextCursors);
+  };
+  const retryRelationships = () => {
+    setPendingAction(navigationAction());
+    void refetch();
+  };
+  const relationshipRecovery = () => {
+    if (!cursors().length) return undefined;
+    return relationships.error instanceof ApiError &&
+      relationships.error.code === "invalid-cursor"
+      ? { label: "First page", action: () => navigate("first", []) }
+      : {
+          label: "Previous page",
+          action: () =>
+            navigate("previous", displayedCursors().slice(0, -1)),
+        };
+  };
 
   return (
     <div class="relationship-group">
@@ -129,31 +174,42 @@ function RelationshipGroup(props: {
             {identifierLabel(props.path.resourceType)}s
           </span>
         </DisclosureButton>
-        <MetaTiming meta={relationships()?.meta} />
+        <MetaTiming meta={settledRelationships()?.meta} />
       </div>
       <Show when={expanded()}>
         <div id={`${key()}-content`} class="relationship-group__content">
-          <Show when={relationships.loading && !relationships()}>
-            <LoadingBlock label="relationships" />
+          <Show when={relationships.loading && !settledRelationships()}>
+            <LoadingBlock
+              label={`relationships page ${formatInteger(cursors().length + 1)}`}
+            />
           </Show>
           <Show when={relationships.error}>
-            <ErrorBlock error={relationships.error} retry={() => void refetch()} />
+            <ErrorBlock
+              label={`Relationships page ${formatInteger(cursors().length + 1)} failed`}
+              error={relationships.error}
+              retry={retryRelationships}
+              secondary={relationshipRecovery()}
+            />
           </Show>
-          <Show when={relationships()}>
+          <Show when={settledRelationships()}>
             {(envelope: () => ApiSuccess<RelationshipPage>) => (
               <>
                 <Pagination
-                  page={cursors().length + 1}
-                  canPrevious={cursors().length > 0}
+                  page={displayedCursors().length + 1}
+                  canPrevious={displayedCursors().length > 0}
                   canNext={envelope().data.pageInfo.hasNextPage}
-                  first={() => setCursors([])}
-                  previous={() => setCursors((value) => value.slice(0, -1))}
+                  busy={relationships.loading}
+                  busyAction={pendingAction()}
+                  first={() => navigate("first", [])}
+                  previous={() =>
+                    navigate("previous", displayedCursors().slice(0, -1))
+                  }
                   next={() => {
                     const next = envelope().data.pageInfo.endCursor;
-                    if (next) setCursors((value) => [...value, next]);
+                    if (next) navigate("next", [...displayedCursors(), next]);
                   }}
                 />
-                <div class="resource-children">
+                <div class="resource-children" aria-busy={relationships.loading}>
                   <For
                     each={envelope().data.items}
                     fallback={<EmptyState>No authorized resources on this page.</EmptyState>}
@@ -183,7 +239,7 @@ function ResourceNode(props: {
   const key = () => resourceKey(props.resource);
   const cycle = () => props.ancestry.has(key());
   const paths = createMemo(
-    () => app.bootstrap()?.data.schema.childPaths[props.resource.type] ?? [],
+    () => app.bootstrapData()?.data.schema.childPaths[props.resource.type] ?? [],
   );
   const expanded = () => app.isExpanded(`resource:${key()}`);
   const selected = () => resourceKey(app.selectedResource() ?? { type: "", id: "" }) === key();
@@ -251,7 +307,28 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   const pageRequest = new LatestRequest();
   const countRequest = new LatestRequest();
   const [cursors, setCursors] = createSignal<string[]>([]);
+  const [countDemandVersion, setCountDemandVersion] = createSignal(0);
+  const [settledPageScope, setSettledPageScope] = createSignal("");
+  let activeCountScope = "";
+  let activeCountLimit = initialCountLimit;
   const cursor = () => cursors().at(-1);
+  const countScope = () =>
+    JSON.stringify([
+      app.subjectId(),
+      app.permission(),
+      props.resourceType,
+      app.cacheEnabled(),
+      app.mutationRevision(),
+    ]);
+  const countLimit = () => {
+    countDemandVersion();
+    const scope = countScope();
+    if (scope !== activeCountScope) {
+      activeCountScope = scope;
+      activeCountLimit = initialCountLimit;
+    }
+    return activeCountLimit;
+  };
   const base = () =>
     expanded() && app.permission()
       ? ([
@@ -266,6 +343,12 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
     const value = base();
     return value ? ([...value, app.pageSize(), cursor() ?? ""] as const) : false;
   };
+  const countSource = () => {
+    const value = base();
+    return value && settledPageScope() === countScope()
+      ? ([...value, countLimit()] as const)
+      : false;
+  };
   const [page, { refetch: refetchPage }] = createResource(pageSource, (input) =>
     pageRequest.run<ObjectPage>("/api/eacl/lookup-resources", {
       method: "POST",
@@ -279,7 +362,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
       }),
     }),
   );
-  const [count, { refetch: refetchCount }] = createResource(base, (input) =>
+  const [count, { refetch: refetchCount }] = createResource(countSource, (input) =>
     countRequest.run<ResourceCount>("/api/eacl/count-resources", {
       method: "POST",
       body: JSON.stringify({
@@ -287,9 +370,51 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
         permission: input[1],
         resourceType: input[2],
         cache: input[3],
+        countLimit: input[5],
       }),
     }),
   );
+  const [displayedPage, setDisplayedPage] = createSignal<ApiSuccess<ObjectPage>>();
+  const [displayedCount, setDisplayedCount] =
+    createSignal<ApiSuccess<ResourceCount>>();
+  const [displayedCountScope, setDisplayedCountScope] = createSignal("");
+  const [displayedCursors, setDisplayedCursors] = createSignal<string[]>([]);
+  const [displayedPageSize, setDisplayedPageSize] = createSignal(app.pageSize());
+  const [pendingPageAction, setPendingPageAction] =
+    createSignal<"first" | "previous" | "next">();
+
+  createEffect(() => {
+    if (page.loading || page.error) return;
+    const envelope = page();
+    if (!envelope) return;
+    setDisplayedPage(envelope);
+    setDisplayedCursors([...cursors()]);
+    setDisplayedPageSize(app.pageSize());
+    setSettledPageScope(countScope());
+  });
+  createEffect(() => {
+    if (!page.loading) setPendingPageAction(undefined);
+  });
+  createEffect(() => {
+    if (count.loading || count.error) return;
+    const envelope = count();
+    if (envelope) {
+      setDisplayedCount(envelope);
+      setDisplayedCountScope(countScope());
+    }
+  });
+
+  const doubleCountLimit = () => {
+    const result = displayedCount()?.data;
+    if (!result?.truncated || count.loading) return;
+    const currentLimit = Math.max(countLimit(), result.limit);
+    const nextLimit = Math.min(Number.MAX_SAFE_INTEGER, currentLimit * 2);
+    if (nextLimit > currentLimit) {
+      activeCountScope = countScope();
+      activeCountLimit = nextLimit;
+      setCountDemandVersion((version) => version + 1);
+    }
+  };
 
   createEffect(
     on(
@@ -304,20 +429,54 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
       { defer: true },
     ),
   );
-  createEffect(() => {
-    const error = page.error;
-    if (error instanceof ApiError && error.code === "invalid-cursor" && cursors().length) {
-      setCursors([]);
-    }
-  });
+  createEffect(
+    on(
+      countScope,
+      () => countRequest.abort(),
+      { defer: true },
+    ),
+  );
   onCleanup(() => {
     pageRequest.abort();
     countRequest.abort();
   });
 
-  const itemCount = () => page()?.data.items.length ?? 0;
-  const rangeStart = () => (itemCount() ? cursors().length * app.pageSize() + 1 : 0);
-  const rangeEnd = () => cursors().length * app.pageSize() + itemCount();
+  const settledPage = displayedPage;
+  const settledCount = () =>
+    displayedCountScope() === countScope() ? displayedCount() : undefined;
+  const pageNavigationAction = () => {
+    if (cursors().length > displayedCursors().length) return "next" as const;
+    if (!cursors().length && displayedCursors().length) return "first" as const;
+    if (cursors().length < displayedCursors().length) return "previous" as const;
+    return undefined;
+  };
+  const navigatePage = (
+    action: "first" | "previous" | "next",
+    nextCursors: string[],
+  ) => {
+    if (page.loading) return;
+    setPendingPageAction(action);
+    setCursors(nextCursors);
+  };
+  const retryPage = () => {
+    setPendingPageAction(pageNavigationAction());
+    void refetchPage();
+  };
+  const pageRecovery = () => {
+    if (!cursors().length) return undefined;
+    return page.error instanceof ApiError && page.error.code === "invalid-cursor"
+      ? { label: "First page", action: () => navigatePage("first", []) }
+      : {
+          label: "Previous page",
+          action: () =>
+            navigatePage("previous", displayedCursors().slice(0, -1)),
+        };
+  };
+  const itemCount = () => settledPage()?.data.items.length ?? 0;
+  const rangeStart = () =>
+    itemCount() ? displayedCursors().length * displayedPageSize() + 1 : 0;
+  const rangeEnd = () =>
+    displayedCursors().length * displayedPageSize() + itemCount();
 
   return (
     <div class="group-card">
@@ -333,18 +492,79 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
         <Show when={expanded()}>
           <div class="group-card__stats">
             <span class="group-card__page-stats">
-              <Show when={page()} fallback={<span class="section-meta">—</span>}>
+              <Show
+                when={settledPage()}
+                fallback={
+                  page.loading
+                    ? <InlineLoading
+                        label={`Loading page ${formatInteger(cursors().length + 1)}`}
+                      />
+                    : page.error
+                      ? <InlineError
+                          label={`Page ${formatInteger(cursors().length + 1)} failed`}
+                        />
+                      : <span class="section-meta">—</span>
+                }
+              >
                 <span class="group-card__range">
-                  {rangeStart()}–{rangeEnd()}
+                  {formatInteger(rangeStart())}–{formatInteger(rangeEnd())}
                 </span>
-                <PaginationTiming meta={page()?.meta} />
+                <PaginationTiming meta={settledPage()?.meta} />
+                <Show when={page.loading && !pendingPageAction()}>
+                  <InlineLoading label={`Refreshing ${props.resourceType} resources`} />
+                </Show>
+                <Show when={page.error}>
+                  <InlineError
+                    label={`Page ${formatInteger(cursors().length + 1)} failed`}
+                  />
+                </Show>
               </Show>
             </span>
             <span class="group-card__stats-separator">of</span>
             <span class="group-card__count-stats">
-              <Show when={count()} fallback={<span class="section-meta">—</span>}>
-                <span class="group-card__count">{count()?.data.count}</span>
-                <PaginationTiming meta={count()?.meta} />
+              <Show
+                when={settledCount()}
+                fallback={
+                  count.loading
+                    ? <InlineLoading label={`Counting ${props.resourceType} resources`} />
+                    : count.error
+                      ? <InlineError label="Count failed" />
+                      : <span class="section-meta">—</span>
+                }
+              >
+                {(envelope: () => ApiSuccess<ResourceCount>) => (
+                  <>
+                    <Show
+                      when={envelope().data.truncated}
+                      fallback={
+                        <span class="group-card__count">
+                          {formatInteger(envelope().data.count)}
+                        </span>
+                      }
+                    >
+                      <button
+                        type="button"
+                        class="group-card__count group-card__count-button"
+                        aria-label={`Count beyond ${formatInteger(envelope().data.count)} ${props.resourceType} resources`}
+                        disabled={count.loading}
+                        aria-busy={count.loading}
+                        onClick={doubleCountLimit}
+                      >
+                        <Show when={count.loading}>
+                          <ButtonSpinner />
+                        </Show>
+                        {formatInteger(envelope().data.count)}+
+                      </button>
+                    </Show>
+                    <PaginationTiming meta={envelope().meta} />
+                    <Show when={count.loading && !envelope().data.truncated}>
+                      <InlineLoading label={`Counting ${props.resourceType} resources`} />
+                    </Show>
+                    <Show when={count.error}>
+                      <InlineError label="Count failed" />
+                    </Show>
+                  </>
+                )}
               </Show>
             </span>
           </div>
@@ -353,27 +573,42 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
 
       <Show when={expanded()}>
         <div id={`${groupKey()}-content`} class="group-card__content">
-          <Show when={(page.loading && !page()) || (count.loading && !count())}>
-            <LoadingBlock label={`${props.resourceType} resources`} />
+          <Show when={page.loading && !settledPage()}>
+            <LoadingBlock
+              label={`${props.resourceType} page ${formatInteger(cursors().length + 1)}`}
+            />
           </Show>
           <Show when={page.error}>
-            <ErrorBlock error={page.error} retry={() => void refetchPage()} />
+            <ErrorBlock
+              label={`${identifierLabel(props.resourceType)} page ${formatInteger(cursors().length + 1)} failed`}
+              error={page.error}
+              retry={retryPage}
+              secondary={pageRecovery()}
+            />
           </Show>
           <Show when={count.error}>
-            <ErrorBlock error={count.error} retry={() => void refetchCount()} />
+            <ErrorBlock
+              label={`${identifierLabel(props.resourceType)} count failed`}
+              error={count.error}
+              retry={() => void refetchCount()}
+            />
           </Show>
-          <Show when={page()}>
+          <Show when={settledPage()}>
             {(envelope: () => ApiSuccess<ObjectPage>) => (
               <>
                 <Pagination
-                  page={cursors().length + 1}
-                  canPrevious={cursors().length > 0}
+                  page={displayedCursors().length + 1}
+                  canPrevious={displayedCursors().length > 0}
                   canNext={envelope().data.pageInfo.hasNextPage}
-                  first={() => setCursors([])}
-                  previous={() => setCursors((value) => value.slice(0, -1))}
+                  busy={page.loading}
+                  busyAction={pendingPageAction()}
+                  first={() => navigatePage("first", [])}
+                  previous={() =>
+                    navigatePage("previous", displayedCursors().slice(0, -1))
+                  }
                   next={() => {
                     const next = envelope().data.pageInfo.endCursor;
-                    if (next) setCursors((value) => [...value, next]);
+                    if (next) navigatePage("next", [...displayedCursors(), next]);
                   }}
                 />
                 <div class="resource-tree" aria-busy={page.loading}>
@@ -408,7 +643,7 @@ export function ResourceTreePanel(): JSX.Element {
         <span class="panel-summary__value">:{app.permission()}</span>
       </div>
       <For
-        each={app.bootstrap()?.data.schema.resourceTypes ?? []}
+        each={app.bootstrapData()?.data.schema.resourceTypes ?? []}
         fallback={<EmptyState>No queryable resource types.</EmptyState>}
       >
         {(resourceType) => <ResourceTypeGroup resourceType={resourceType} />}

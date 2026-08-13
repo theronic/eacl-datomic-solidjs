@@ -26,7 +26,7 @@
 ## 4. EACL Query Endpoints
 
 - [x] 4.1 Implement and test `POST /api/eacl/lookup-resources` with first/after pagination, opaque `pageInfo`, timing, and cache provenance.
-- [x] 4.2 Implement and test `POST /api/eacl/count-resources` as an exact non-page query independent from lookup cursors.
+- [x] 4.2 Implement and test `POST /api/eacl/count-resources` as a non-page query independent from lookup cursors.
 - [x] 4.3 Implement and test `POST /api/eacl/lookup-subjects` with bounded results and pagination metadata.
 - [x] 4.4 Implement and test `POST /api/eacl/read-relationships` with bounded traversal inputs and opaque continuation.
 - [x] 4.5 Implement and test `POST /api/eacl/check-permission` with authoritative allowed/denied output.
@@ -97,4 +97,10 @@
 - [x] 12.1 Reconcile seed progress only from actual bootstrap responses, keep polling across intermediate mutation revisions, and verify terminal progress/totals converge without replacing the explorer.
 - [x] 12.2 Prevent no-op cursor resets from issuing duplicate page lookups after cache eviction, verify one lookup and one count refetch, and visually separate locally derived descriptions from passthrough ids.
 - [x] 12.3 Keep recursive nested authorization bounded by bypassing complete-answer caching for one-off child permission checks, verify schema writes are no longer starved behind a full forward denotation, and rename the default preset to **Non-recursive**.
-- [x] 12.4 Split page and exact-count timing into independent Solid DOM fragments so page navigation cannot flash or replace stable count provenance.
+- [x] 12.4 Split page and count timing into independent Solid DOM fragments so page navigation cannot flash or replace stable count provenance.
+
+## 13. Progressive Demand-Bounded Totals
+
+- [x] 13.1 Require a positive `countLimit` on the count HTTP endpoint, forward it as EACL `:count-limit`, and return the normalized limit and truncation state.
+- [x] 13.2 Start each Solid resource total at 50,000, render truncated totals as keyboard-operable `N+` buttons, and double only the activated group's limit until exhaustion while preserving count/page isolation.
+- [x] 13.3 Add backend, component, type, lint, build, and documentation coverage for invalid limits, initial demand, doubling, exact completion, semantic-query reset, and page-size/count independence.
