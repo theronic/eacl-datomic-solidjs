@@ -1,5 +1,6 @@
 import { createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import { LatestRequest } from "../api";
+import { formatInteger } from "../format";
 import { useAppState } from "../state";
 import { PAGE_SIZE_OPTIONS, type PageSize, type SeedProgress } from "../types";
 import { ButtonSpinner, ErrorBlock } from "./Common";
@@ -83,10 +84,12 @@ export function Header(): JSX.Element {
             <strong>
               <Show
                 when={app.seeding()}
-                fallback={ready() ? `${serverTotal()} servers` : "Server total unavailable"}
+                fallback={ready()
+                  ? `${formatInteger(serverTotal())} servers`
+                  : "Server total unavailable"}
               >
-                {app.seedProgress()?.serversCompleted ?? 0} /{" "}
-                {app.seedProgress()?.serversTarget ?? 0} servers
+                {formatInteger(app.seedProgress()?.serversCompleted ?? 0)} /{" "}
+                {formatInteger(app.seedProgress()?.serversTarget ?? 0)} servers
               </Show>
             </strong>
           </div>
@@ -102,7 +105,7 @@ export function Header(): JSX.Element {
               }
             >
               <For each={PAGE_SIZE_OPTIONS}>
-                {(value) => <option value={value}>{value}</option>}
+                {(value) => <option value={value}>{formatInteger(value)}</option>}
               </For>
             </select>
           </label>

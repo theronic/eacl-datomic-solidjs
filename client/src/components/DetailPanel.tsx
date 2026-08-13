@@ -9,6 +9,7 @@ import {
   type JSX,
 } from "solid-js";
 import { ApiError, LatestRequest } from "../api";
+import { formatInteger } from "../format";
 import { useAppState } from "../state";
 import type { ApiSuccess, EaclObject, ObjectPage } from "../types";
 import {
@@ -119,11 +120,13 @@ function PermissionSubjects(props: {
         <MetaTiming meta={settledSubjects()?.meta} />
       </div>
       <Show when={subjects.loading && !settledSubjects()}>
-        <LoadingBlock label={`permission holders page ${cursors().length + 1}`} />
+        <LoadingBlock
+          label={`permission holders page ${formatInteger(cursors().length + 1)}`}
+        />
       </Show>
       <Show when={subjects.error}>
         <ErrorBlock
-          label={`Permission holders page ${cursors().length + 1} failed`}
+          label={`Permission holders page ${formatInteger(cursors().length + 1)} failed`}
           error={subjects.error}
           retry={retrySubjects}
           secondary={subjectRecovery()}

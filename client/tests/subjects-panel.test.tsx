@@ -32,7 +32,7 @@ describe("subjects and permissions", () => {
               hasNextPage: offset === 0,
               hasPreviousPage: offset > 0,
               nextOffset: offset === 0 ? 20 : undefined,
-              total: 21,
+              total: 53_055,
             },
           }));
         }
@@ -50,7 +50,7 @@ describe("subjects and permissions", () => {
       .toBeNull();
     fireEvent.click(admin);
     expect(admin).toHaveAttribute("aria-pressed", "true");
-    await screen.findByText("21 total");
+    await screen.findByText("53,055 total");
     expect(screen.getByText("User 1", { selector: ".resource-caption__name" }).parentElement)
       .toHaveTextContent("User 1 user-1");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));

@@ -1,4 +1,5 @@
 import { Show, type Accessor, type JSX } from "solid-js";
+import { formatInteger, formatMilliseconds } from "../format";
 import type { ApiMeta, CacheStatus } from "../types";
 
 export function identifierLabel(value: string | undefined): string {
@@ -26,7 +27,9 @@ export function CacheTiming(props: {
           {props.status ?? "miss"}
         </span>
         <Show when={props.elapsedMs !== undefined}>
-          <span class="cache-timing__duration"> {props.elapsedMs?.toFixed(1)} ms</span>
+          <span class="cache-timing__duration">
+            {" "}{formatMilliseconds(props.elapsedMs ?? 0)} ms
+          </span>
         </Show>
       </span>
     </Show>
@@ -96,7 +99,7 @@ export function Pagination(props: {
         </Show>
         Previous
       </button>
-      <span class="pagination-page">Page {props.page}</span>
+      <span class="pagination-page">Page {formatInteger(props.page)}</span>
       <button
         type="button"
         class="pagination-button"

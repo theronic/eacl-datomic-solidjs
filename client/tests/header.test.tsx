@@ -12,6 +12,7 @@ describe("production capabilities", () => {
           return jsonResponse(success({
             ...bootstrap,
             capabilities: {...bootstrap.capabilities, seedWrite: false},
+            totals: {...bootstrap.totals, servers: 1_000_048},
           }));
         }
         throw new Error(`Unexpected request: ${String(input)}`);
@@ -23,7 +24,8 @@ describe("production capabilities", () => {
       </AppStateProvider>
     ));
 
-    await waitFor(() => expect(screen.getByText("48 servers")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("1,000,048 servers"))
+      .toBeInTheDocument());
     expect(screen.queryByRole("spinbutton", { name: "Servers to seed" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Seed DB" }))

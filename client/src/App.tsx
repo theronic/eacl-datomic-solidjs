@@ -6,6 +6,7 @@ import { Header } from "./components/Header";
 import { ResourceTreePanel } from "./components/ResourceTree";
 import { SchemaPanel } from "./components/SchemaPanel";
 import { SubjectsPanel } from "./components/SubjectsPanel";
+import { formatInteger } from "./format";
 import { useAppState } from "./state";
 
 function SeedProgress(): JSX.Element {
@@ -20,7 +21,8 @@ function SeedProgress(): JSX.Element {
       <div class="seed-progress-banner__copy">
         <strong>Seeding Datahike</strong>
         <span>
-          {progress()?.serversCompleted ?? 0} / {progress()?.serversTarget ?? 0} servers
+          {formatInteger(progress()?.serversCompleted ?? 0)} / {" "}
+          {formatInteger(progress()?.serversTarget ?? 0)} servers
         </span>
         <span class="seed-progress-card__label">
           {progress()?.label ?? "Applying managed EACL relationships"}

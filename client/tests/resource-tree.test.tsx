@@ -47,7 +47,7 @@ describe("reactive resource paging", () => {
           meta: {
             revision: "h100.c0",
             requestId: "count-request",
-            elapsedMs: 60.9,
+            elapsedMs: 14_379.3,
             cacheStatus: "miss" as const,
           },
         });
@@ -114,7 +114,7 @@ describe("reactive resource paging", () => {
     fireEvent.click(screen.getByRole("button", { name: /Server Page 1.*server-page-1/i }));
     expect(await screen.findByRole("button", { name: /User 1/ })).toBeInTheDocument();
     const countStats = group.querySelector(".group-card__count-stats");
-    expect(countStats).toHaveTextContent("48(60.9msmiss)");
+    expect(countStats).toHaveTextContent("48(14,379.3msmiss)");
     fireEvent.click(
       screen
         .getAllByRole("button", { name: "Next" })
@@ -140,7 +140,7 @@ describe("reactive resource paging", () => {
     expect(group.querySelector(".group-card__page-stats"))
       .not.toHaveTextContent("21–21");
     expect(group.querySelector(".group-card__count-stats")).toBe(countStats);
-    expect(countStats).toHaveTextContent("48(60.9msmiss)");
+    expect(countStats).toHaveTextContent("48(14,379.3msmiss)");
     releaseSecondPage();
     await screen.findByText("Server Page 2");
     expect(group.querySelector(".group-card__count-stats")).toBe(countStats);
@@ -208,7 +208,7 @@ describe("reactive resource paging", () => {
     const truncatedCount = await within(group).findByRole("button", {
       name: /Count beyond 50,000 server resources/,
     });
-    expect(truncatedCount).toHaveTextContent("50k+");
+    expect(truncatedCount).toHaveTextContent("50,000+");
     expect(countBodies).toEqual([
       expect.objectContaining({ countLimit: 50_000, cache: true }),
     ]);
@@ -218,7 +218,7 @@ describe("reactive resource paging", () => {
     const doubledCount = await within(group).findByRole("button", {
       name: /Count beyond 100,000 server resources/,
     });
-    expect(doubledCount).toHaveTextContent("100k+");
+    expect(doubledCount).toHaveTextContent("100,000+");
     expect(countBodies).toEqual([
       expect.objectContaining({ countLimit: 50_000, cache: true }),
       expect.objectContaining({ countLimit: 100_000, cache: true }),

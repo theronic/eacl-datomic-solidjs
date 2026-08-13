@@ -10,6 +10,7 @@ import {
   type JSX,
 } from "solid-js";
 import { ApiError, LatestRequest } from "../api";
+import { formatInteger, formatMilliseconds } from "../format";
 import { useAppState } from "../state";
 import type {
   ApiMeta,
@@ -36,13 +37,6 @@ import {
 
 const resourceKey = (resource: EaclObject) => `${resource.type}:${resource.id}`;
 const initialCountLimit = 50_000;
-const countFormatter = new Intl.NumberFormat("en-US");
-const compactCountFormatter = new Intl.NumberFormat("en-US", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-const formatTruncatedCount = (count: number) =>
-  compactCountFormatter.format(count).toLocaleLowerCase("en-US");
 
 function PaginationTiming(props: { meta?: ApiMeta }): JSX.Element {
   return (
@@ -50,7 +44,7 @@ function PaginationTiming(props: { meta?: ApiMeta }): JSX.Element {
       <span class="pagination-timing">
         <span aria-hidden="true">(</span>
         <Show when={props.meta?.elapsedMs !== undefined}>
-          <span>{props.meta?.elapsedMs?.toFixed(1)}ms</span>
+          <span>{formatMilliseconds(props.meta?.elapsedMs ?? 0)}ms</span>
         </Show>
         <Show when={props.meta?.cacheStatus}>
           {(status) => (
@@ -185,11 +179,13 @@ function RelationshipGroup(props: {
       <Show when={expanded()}>
         <div id={`${key()}-content`} class="relationship-group__content">
           <Show when={relationships.loading && !settledRelationships()}>
-            <LoadingBlock label={`relationships page ${cursors().length + 1}`} />
+            <LoadingBlock
+              label={`relationships page ${formatInteger(cursors().length + 1)}`}
+            />
           </Show>
           <Show when={relationships.error}>
             <ErrorBlock
-              label={`Relationships page ${cursors().length + 1} failed`}
+              label={`Relationships page ${formatInteger(cursors().length + 1)} failed`}
               error={relationships.error}
               retry={retryRelationships}
               secondary={relationshipRecovery()}
@@ -500,21 +496,27 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                 when={settledPage()}
                 fallback={
                   page.loading
-                    ? <InlineLoading label={`Loading page ${cursors().length + 1}`} />
+                    ? <InlineLoading
+                        label={`Loading page ${formatInteger(cursors().length + 1)}`}
+                      />
                     : page.error
-                      ? <InlineError label={`Page ${cursors().length + 1} failed`} />
+                      ? <InlineError
+                          label={`Page ${formatInteger(cursors().length + 1)} failed`}
+                        />
                       : <span class="section-meta">—</span>
                 }
               >
                 <span class="group-card__range">
-                  {rangeStart()}–{rangeEnd()}
+                  {formatInteger(rangeStart())}–{formatInteger(rangeEnd())}
                 </span>
                 <PaginationTiming meta={settledPage()?.meta} />
                 <Show when={page.loading && !pendingPageAction()}>
                   <InlineLoading label={`Refreshing ${props.resourceType} resources`} />
                 </Show>
                 <Show when={page.error}>
-                  <InlineError label={`Page ${cursors().length + 1} failed`} />
+                  <InlineError
+                    label={`Page ${formatInteger(cursors().length + 1)} failed`}
+                  />
                 </Show>
               </Show>
             </span>
@@ -536,14 +538,14 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                       when={envelope().data.truncated}
                       fallback={
                         <span class="group-card__count">
-                          {countFormatter.format(envelope().data.count)}
+                          {formatInteger(envelope().data.count)}
                         </span>
                       }
                     >
                       <button
                         type="button"
                         class="group-card__count group-card__count-button"
-                        aria-label={`Count beyond ${countFormatter.format(envelope().data.count)} ${props.resourceType} resources`}
+                        aria-label={`Count beyond ${formatInteger(envelope().data.count)} ${props.resourceType} resources`}
                         disabled={count.loading}
                         aria-busy={count.loading}
                         onClick={doubleCountLimit}
@@ -551,7 +553,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                         <Show when={count.loading}>
                           <ButtonSpinner />
                         </Show>
-                        {formatTruncatedCount(envelope().data.count)}+
+                        {formatInteger(envelope().data.count)}+
                       </button>
                     </Show>
                     <PaginationTiming meta={envelope().meta} />
@@ -572,11 +574,13 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
       <Show when={expanded()}>
         <div id={`${groupKey()}-content`} class="group-card__content">
           <Show when={page.loading && !settledPage()}>
-            <LoadingBlock label={`${props.resourceType} page ${cursors().length + 1}`} />
+            <LoadingBlock
+              label={`${props.resourceType} page ${formatInteger(cursors().length + 1)}`}
+            />
           </Show>
           <Show when={page.error}>
             <ErrorBlock
-              label={`${identifierLabel(props.resourceType)} page ${cursors().length + 1} failed`}
+              label={`${identifierLabel(props.resourceType)} page ${formatInteger(cursors().length + 1)} failed`}
               error={page.error}
               retry={retryPage}
               secondary={pageRecovery()}

@@ -10,6 +10,7 @@ import {
   type JSX,
 } from "solid-js";
 import { LatestRequest } from "../api";
+import { formatInteger } from "../format";
 import { useAppState } from "../state";
 import type { ApiSuccess, KnownSubjectPage } from "../types";
 import {
@@ -148,17 +149,17 @@ export function SubjectsPanel(): JSX.Element {
           </p>
           <Show when={settledSubjects()?.data.pageInfo.total !== undefined}>
             <span class="section-meta">
-              {settledSubjects()?.data.pageInfo.total} total
+              {formatInteger(settledSubjects()?.data.pageInfo.total ?? 0)} total
             </span>
           </Show>
         </div>
 
         <Show when={subjects.loading && !settledSubjects()}>
-          <LoadingBlock label={`subjects page ${targetPage()}`} />
+          <LoadingBlock label={`subjects page ${formatInteger(targetPage())}`} />
         </Show>
         <Show when={subjects.error}>
           <ErrorBlock
-            label={`Subjects page ${targetPage()} failed`}
+            label={`Subjects page ${formatInteger(targetPage())} failed`}
             error={subjects.error}
             retry={retry}
             secondary={offset() > 0

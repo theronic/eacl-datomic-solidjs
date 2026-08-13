@@ -10,6 +10,7 @@ import {
   type JSX,
 } from "solid-js";
 import { LatestRequest } from "../api";
+import { formatInteger } from "../format";
 import { useAppState } from "../state";
 import type { SchemaInfo } from "../types";
 import {
@@ -93,9 +94,9 @@ export function SchemaPanel(): JSX.Element {
               Schema
               <Show when={settledSchema()}>
                 {(envelope) => (
-                  <> ({envelope().data.resourceCount} resources, {" "}
-                    {envelope().data.relationCount} relations, {" "}
-                    {envelope().data.permissionCount} permissions)
+                  <> ({formatInteger(envelope().data.resourceCount)} resources, {" "}
+                    {formatInteger(envelope().data.relationCount)} relations, {" "}
+                    {formatInteger(envelope().data.permissionCount)} permissions)
                   </>
                 )}
               </Show>
