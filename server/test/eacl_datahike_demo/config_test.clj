@@ -11,10 +11,11 @@
     (is (nil? (config/datahike-config config/default-config)))
     (is (= 65536 (:max-body-bytes config/default-config)))
     (is (= 1000000 (:max-seed-servers config/default-config)))
-    (is (= 250 (:seed-transaction-size config/default-config)))
+    (is (= 1000 (:seed-transaction-size config/default-config)))
     (is (= 0 (:seed-pause-ms config/default-config)))
-    (is (= 4 (:seed-in-flight config/default-config)))
+    (is (= 2 (:seed-in-flight config/default-config)))
     (is (= 8192 (:datahike-store-cache-size config/default-config)))
+    (is (= (* 8 1024 1024 1024) (:lmdb-map-size config/default-config)))
     (is (zero? (:datahike-search-cache-size config/default-config)))
     (is (= 512 (:cache-max-entries config/default-config)))
     (is (= (* 16 1024 1024)
@@ -69,6 +70,26 @@
       (is (= false (:commit-graph? database-config)))
       (is (= 8192 (:store-cache-size database-config)))
       (is (zero? (:search-cache-size database-config)))))
+  (testing "tiered LMDB serving writes through to the durable S3 store"
+    (let [store-id (random-uuid)
+          parsed (config/from-env
+                  {"EACL_DATAHIKE_DEMO_STORE_BACKEND" "s3-lmdb"
+                   "EACL_DATAHIKE_DEMO_STORE_ID" (str store-id)
+                   "EACL_DATAHIKE_DEMO_S3_BUCKET" "demo-bucket"
+                   "EACL_DATAHIKE_DEMO_S3_REGION" "us-east-1"
+                   "EACL_DATAHIKE_DEMO_LMDB_PATH" "/tmp/datahike-lmdb"
+                   "EACL_DATAHIKE_DEMO_LMDB_MAP_SIZE" "4294967296"})
+          store (:store (config/datahike-config parsed))]
+      (is (= :tiered (:backend store)))
+      (is (= :write-through (:write-policy store)))
+      (is (= :frontend-first (:read-policy store)))
+      (is (= {:backend :lmdb
+              :path "/tmp/datahike-lmdb"
+              :map-size 4294967296
+              :id store-id}
+             (:frontend-config store)))
+      (is (= :s3 (get-in store [:backend-config :backend])))
+      (is (= store-id (get-in store [:backend-config :id])))))
   (testing "a local S3-compatible endpoint is parsed without custom credential variables"
     (let [store-id (random-uuid)
           parsed (config/from-env

@@ -44,14 +44,12 @@ export AWS_DEFAULT_REGION=us-east-1
 
 aws --endpoint-url http://127.0.0.1:19000 s3api create-bucket \
   --bucket eacl-datahike-local
-aws --endpoint-url http://127.0.0.1:19000 s3api put-bucket-versioning \
-  --bucket eacl-datahike-local \
-  --versioning-configuration Status=Enabled
 ```
 
 `create-bucket` reports `BucketAlreadyOwnedByYou` on a later run; that is safe
-to skip. Versioning makes local persistence and reconnect behavior closer to
-the production topology.
+to skip. Leave the bucket unversioned, matching production. Datahike supplies
+database history; exact offline reachability GC reclaims unreachable immutable
+objects without turning those deletes into noncurrent S3 versions.
 
 ## Run the application
 
@@ -65,9 +63,9 @@ export EACL_DATAHIKE_DEMO_S3_BUCKET=eacl-datahike-local
 export EACL_DATAHIKE_DEMO_S3_REGION=us-east-1
 export EACL_DATAHIKE_DEMO_S3_ENDPOINT=http://127.0.0.1:19000
 export EACL_DATAHIKE_DEMO_S3_PATH_STYLE_ACCESS=true
-export EACL_DATAHIKE_DEMO_DATAHIKE_STORE_CACHE_SIZE=8192
+export EACL_DATAHIKE_DEMO_DATAHIKE_STORE_CACHE_SIZE=1000
 export EACL_DATAHIKE_DEMO_DATAHIKE_SEARCH_CACHE_SIZE=0
-export EACL_DATAHIKE_DEMO_SEED_IN_FLIGHT=4
+export EACL_DATAHIKE_DEMO_SEED_IN_FLIGHT=2
 
 npm run install:client
 npm run dev:server
@@ -95,8 +93,12 @@ EACL_DATAHIKE_DEMO_E2E_URL=http://127.0.0.1:5173 npm run test:e2e
 ```
 
 For the disposable storage compatibility suite instead of a persistent
-development environment, run `infra/scripts/test-minio.sh`. It creates and
-removes its own container and test database.
+development environment, install native LMDB (`brew install lmdb` on Apple
+Silicon) and run `infra/scripts/test-minio.sh`. It creates an unversioned bucket,
+seeds through direct S3, waits for exact `gc-storage`, reconnects through a
+write-through/read-through LMDB frontend, commits through that tier, and
+reconnects through direct S3 to prove durability. Production uses an 8 GiB
+sparse LMDB map at `/var/lib/eacl-datahike-demo/lmdb` and serving cache 8,192.
 
 Before testing storage reclamation, read
 [`storage-maintenance.md`](storage-maintenance.md). Never point a disposable
@@ -112,3 +114,16 @@ docker start eacl-datahike-minio
 Removing the container does not remove the named volume. Deleting
 `eacl-datahike-minio` with `docker volume rm` permanently deletes the local
 database and should only be done deliberately.
+
+## Measurement gotchas (2026-08-14)
+
+- MinIO's Prometheus endpoint caches responses for roughly 10–15 seconds.
+  When counting request deltas around a probe, wait at least 15 seconds
+  after the probe before scraping, or the delta reads as zero.
+- The JDK URL-connection HTTP client used by the AWS SDK races MinIO's
+  keep-alive connection close, and Datahike's writer shuts down on the
+  resulting transient `Unexpected end of file from server` instead of
+  retrying. For sustained seeding, run the server with
+  `JAVA_TOOL_OPTIONS=-Dhttp.keepAlive=false` until the storage layer's
+  failure handling is repaired (the connection can be re-established only
+  by restarting the application; the durable store resumes cleanly).

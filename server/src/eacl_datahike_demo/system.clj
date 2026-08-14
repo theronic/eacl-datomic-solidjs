@@ -7,7 +7,11 @@
             [eacl-datahike-demo.api :as api]
             [eacl-datahike-demo.config :as config]
             [eacl-datahike-demo.data :as data]
+            [eacl-datahike-demo.eacl-adapter :as eacl-adapter]
             [eacl-datahike-demo.http :as http]
+            [eacl-datahike-demo.storage-gc :as storage-gc]
+            [konserve.impl.defaults :as konserve-defaults]
+            [konserve.tiered :as konserve-tiered]
             [konserve-s3.core :as konserve-s3]
             [nrepl.server :as nrepl]
             [ring.adapter.jetty :as jetty])
@@ -15,11 +19,24 @@
 
 (defonce !system (atom nil))
 
+(defn- skip-tiered-full-sync
+  "Keep a durable LMDB frontend as a lazy read-through cache.
+
+  Datahike's default tiered-store readiness path enumerates every backend key
+  and copies every missing value before connect returns.  Konserve S3 obtains
+  those logical keys by reading every object's metadata, so a large database
+  otherwise turns every restart into a full-store S3 scan.  This application
+  has exactly one writer and uses :write-through, so commits keep both tiers
+  coherent; frontend misses safely fall through to the authoritative backend
+  and populate LMDB."
+  [_store _sync-strategy _opts]
+  true)
+
 (defn- durable-source-lifecycle
   [{:keys [store-backend store-id]}]
   (when (not= :memory store-backend)
     {:application :eacl-datahike-demo
-     :store-backend store-backend
+     :store-backend (if (= :s3-lmdb store-backend) :s3 store-backend)
      :store-id (str store-id)}))
 
 (defn client-options
@@ -35,23 +52,37 @@
                       :denotation-max-weight cache-denotation-max-weight
                       :answer-max-weight cache-answer-max-weight
                       :managed-proof-max-atoms cache-managed-proof-max-atoms}}
+             ;; The demo's platform-wide subject legitimately exceeds the
+             ;; default per-request work ceilings on exhaustive counts.
+             :recursive-traversal-limits {:max-derived-grants 5000000
+                                          :max-advanced-datoms 5000000
+                                          :max-queued-work 1000000}
              :execution-timeout-ms request-timeout-ms}
       security-key (assoc :security-key security-key)
       source-lifecycle (assoc :source-lifecycle source-lifecycle))))
 
 (defn- open-connection!
   [runtime-config]
-  (if-let [database-config (config/datahike-config runtime-config)]
-    (if (d/database-exists? database-config)
-      {:conn (d/connect database-config)
-       :database-config database-config
-       :database-created? false}
-      {:conn (datahike-eacl/create-conn data/demo-attributes database-config)
-       :database-config database-config
-       :database-created? true})
-    {:conn (datahike-eacl/create-conn data/demo-attributes)
-     :database-config nil
-     :database-created? true}))
+  (when (= :s3-lmdb (:store-backend runtime-config))
+    ;; Loading this namespace registers the optional native :lmdb backend.
+    (require 'datahike-lmdb.core))
+  (let [open!
+        (fn []
+          (if-let [database-config (config/datahike-config runtime-config)]
+            (if (d/database-exists? database-config)
+              {:conn (d/connect database-config)
+               :database-config database-config
+               :database-created? false}
+              {:conn (datahike-eacl/create-conn data/demo-attributes database-config)
+               :database-config database-config
+               :database-created? true})
+            {:conn (datahike-eacl/create-conn data/demo-attributes)
+             :database-config nil
+             :database-created? true}))]
+    (if (= :s3-lmdb (:store-backend runtime-config))
+      (with-redefs [konserve-tiered/sync-on-connect skip-tiered-full-sync]
+        (open!))
+      (open!))))
 
 (defn build-system
   [runtime-config]
@@ -61,7 +92,9 @@
     (try
       (let [{:keys [conn] :as connection} (open-connection! runtime-config)
             _ (reset! !conn conn)
-            acl (datahike-eacl/make-client
+            acl ((if (= :s3-lmdb (:store-backend runtime-config))
+                   eacl-adapter/make-tiered-client
+                   datahike-eacl/make-client)
                  conn (client-options runtime-config))
             !seed-progress (atom data/ready-progress)
             system (merge
@@ -72,9 +105,9 @@
                      :eacl-permits
                      (Semaphore. (:max-eacl-concurrency runtime-config) true)
                      :!cache-generation (atom 0)
-                     :!cache-prewarm (atom nil)
                      :!metrics (atom {})
                      :!seed-running? (atom false)
+                     :!storage-gc-running? (atom false)
                      :!seed-progress !seed-progress
                      :evict-lock (Object.)})
             ready-progress (data/install-demo!
@@ -91,7 +124,7 @@
               (log/warn "Failed to release Datahike after startup failure"
                         {:exception-class
                          (.getName (class cleanup-error))}))))
-        (when (= :s3 (:store-backend runtime-config))
+        (when (#{:s3 :s3-lmdb} (:store-backend runtime-config))
           (try
             (konserve-s3/shutdown-clients!)
             (catch Throwable cleanup-error
@@ -106,14 +139,10 @@
     (.stop http-server)))
 
 (defn close-system!
-  [{:keys [nrepl-server conn executor config cache-prewarm] :as system}]
+  [{:keys [nrepl-server conn executor config] :as system}]
   (stop-http! system)
   (when nrepl-server
     (nrepl/stop-server nrepl-server))
-  (when cache-prewarm
-    (eacl/cancel! (:cancellation-token cache-prewarm))
-    (.cancel ^java.util.concurrent.Future (:future cache-prewarm) true)
-    (some-> system :!cache-prewarm (reset! nil)))
   (when executor
     (.shutdownNow ^ExecutorService executor)
     (.awaitTermination ^ExecutorService executor 2 TimeUnit/SECONDS))
@@ -123,8 +152,36 @@
       (catch IllegalStateException exception
         (log/debug "Datahike connection was already released"
                    {:exception-class (.getName (class exception))}))))
-  (when (= :s3 (:store-backend config))
+  (when (#{:s3 :s3-lmdb} (:store-backend config))
     (konserve-s3/shutdown-clients!)))
+
+(defn gc-storage!
+  "Run exact Datahike reachability GC in the sole writer JVM.
+  Call only during an operator-controlled maintenance window."
+  ([] (gc-storage! @!system))
+  ([system]
+   (when-not system
+     (throw (ex-info "The EACL Datahike system is not running."
+                     {:type :eacl-datahike-demo.system/not-running})))
+   (when @(:!seed-running? system)
+     (throw (ex-info "Cannot run storage GC while a seed is active."
+                     {:type :eacl-datahike-demo.system/seed-running})))
+   (when-not (compare-and-set! (:!storage-gc-running? system) false true)
+     (throw (ex-info "Storage GC is already running."
+                     {:type :eacl-datahike-demo.system/gc-running})))
+   (try
+     (let [result (with-redefs [konserve-defaults/list-keys
+                                storage-gc/bounded-list-keys]
+                    @(d/gc-storage (:conn system)))]
+       (if (instance? Throwable result)
+         (throw result)
+         ;; Datahike returns the complete deleted-key set. Returning that through
+         ;; nREPL can serialize hundreds of thousands of UUIDs after a large
+         ;; sweep, so expose the operational fact the caller needs instead.
+         {:status :complete
+          :deleted-key-count (count result)}))
+     (finally
+       (reset! (:!storage-gc-running? system) false)))))
 
 (defn- start-nrepl
   [base]
@@ -135,68 +192,12 @@
       (assoc base :nrepl-server
              (nrepl/start-server :bind nrepl-host :port nrepl-port)))))
 
-(def ^:private cache-prewarm-timeout-ms 300000)
-
-(defn prewarm-cache!
-  "Warms the public demo's canonical first page.
-  This is intentionally a demo-specific optimization, not an EACL default."
-  [system cancellation-token]
-  (let [common {:subject (data/->object :user "user-1")
-                :permission :view
-                :resource/type :server
-                :cancellation-token cancellation-token}
-        started (System/nanoTime)
-        ;; The extended timeout is part of the public query identity, so that
-        ;; cold traversal cannot directly populate the normal HTTP answer key.
-        ;; Prime Datahike's store cache without retaining that one-off answer,
-        ;; then replay the exact browser demand under the configured timeout.
-        storage-prime
-        (eacl/lookup-resources
-         (:acl system)
-         (assoc common
-                :first 20
-                :cache? false
-                :timeout-ms cache-prewarm-timeout-ms))
-        page
-        (eacl/lookup-resources
-         (:acl system)
-         (assoc common :first 20 :cache? true))]
-    {:status :complete
-     :elapsed-ms (/ (double (- (System/nanoTime) started)) 1000000.0)
-     :storage-prime-items (count (:data storage-prime))
-     :page-items (count (:data page))}))
-
-(defn- start-cache-prewarm
-  [system]
-  (if (or (not= :production (get-in system [:config :mode]))
-          (:cache-prewarm system))
-    system
-    (let [cancellation-token (eacl/cancellation-token)
-          state (atom {:status :running})
-          task
-          (.submit
-           ^ExecutorService (:executor system)
-           ^Callable
-           (reify Callable
-             (call [_]
-               (try
-                 (reset! state (prewarm-cache! system cancellation-token))
-                 (catch Throwable throwable
-                   (let [cancelled?
-                         (= :eacl.execution/cancelled (:type (ex-data throwable)))]
-                     (reset! state
-                             {:status (if cancelled? :cancelled :error)
-                              :exception-class (.getName (class throwable))})
-                     (when-not cancelled?
-                       (log/warn "EACL demo cache prewarm failed"
-                                 {:exception-class
-                                  (.getName (class throwable))})))))
-               nil)))]
-      (let [prewarm {:cancellation-token cancellation-token
-                     :future task
-                     :state state}]
-        (some-> system :!cache-prewarm (reset! prewarm))
-        (assoc system :cache-prewarm prewarm)))))
+;; The production cache prewarm was removed together with the engine
+;; behavior it papered over: the retired engine's cold first page visited
+;; every branch (minutes against S3), so the demo warmed the canonical
+;; page at boot. The stable-discovery engine's cold first page costs a
+;; handful of storage reads, and hiding cold behavior distorts exactly
+;; the measurements this deployment exists to produce.
 
 (defn jetty-options
   [{:keys [host port request-timeout-ms jetty-min-threads
@@ -222,8 +223,7 @@
              (jetty-options (:config base)))
             running (-> base
                         (assoc :http-server server)
-                        start-nrepl
-                        start-cache-prewarm)]
+                        start-nrepl)]
         (reset! !system running)
         (log/info "EACL Datahike demo ready"
                   {:host host
@@ -252,10 +252,17 @@
   nil)
 
 (def ^:private reusable-config-keys
-  [:store-backend :store-id :store-path :s3-bucket :s3-region
+  [:mode
+   :store-backend :store-id :store-path :s3-bucket :s3-region
    :s3-endpoint-override :s3-path-style-access? :s3-access-key :s3-secret
-   :security-key
-   :request-timeout-ms :max-eacl-concurrency :nrepl-host :nrepl-port])
+   :lmdb-path :lmdb-map-size
+   :datahike-store-cache-size :datahike-search-cache-size
+   :security-key :legacy-server-count
+   :request-timeout-ms :max-eacl-concurrency
+   :cache-max-entries :cache-projection-max-weight
+   :cache-denotation-max-weight :cache-answer-max-weight
+   :cache-managed-proof-max-atoms
+   :nrepl-host :nrepl-port])
 
 (defn restart!
   ([] (restart! (config/from-env)))

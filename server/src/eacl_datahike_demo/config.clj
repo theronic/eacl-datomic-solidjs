@@ -13,14 +13,16 @@
    :s3-region "us-east-1"
    :s3-endpoint-override nil
    :s3-path-style-access? false
+   :lmdb-path nil
+   :lmdb-map-size (* 8 1024 1024 1024)
    :datahike-store-cache-size 8192
    :datahike-search-cache-size 0
    :request-timeout-ms 30000
    :max-body-bytes 65536
    :max-seed-servers 1000000
-   :seed-transaction-size 250
+   :seed-transaction-size 1000
    :seed-pause-ms 0
-   :seed-in-flight 4
+   :seed-in-flight 2
    :legacy-server-count nil
    :max-count-limit 1000000
    :max-eacl-concurrency 4
@@ -80,9 +82,10 @@
 (defn- parse-backend
   [value]
   (let [backend (keyword (str/lower-case (str value)))]
-    (if (#{:memory :file :s3} backend)
+    (if (#{:memory :file :s3 :s3-lmdb} backend)
       backend
-      (invalid! :store-backend "store-backend must be memory, file, or s3."))))
+      (invalid! :store-backend
+                "store-backend must be memory, file, s3, or s3-lmdb."))))
 
 (defn- parse-uuid-env
   [field value]
@@ -128,6 +131,7 @@
 
 (defn validate
   [{:keys [mode host port store-backend store-id store-path s3-bucket
+           lmdb-path lmdb-map-size
            s3-region request-timeout-ms max-body-bytes max-seed-servers
            seed-transaction-size seed-pause-ms seed-in-flight
            legacy-server-count max-count-limit
@@ -144,17 +148,23 @@
   (when (str/blank? host)
     (invalid! :host "host must not be blank."))
   (validate-port :port port)
-  (when-not (#{:memory :file :s3} store-backend)
-    (invalid! :store-backend "store-backend must be memory, file, or s3."))
+  (when-not (#{:memory :file :s3 :s3-lmdb} store-backend)
+    (invalid! :store-backend
+              "store-backend must be memory, file, s3, or s3-lmdb."))
   (when (and (not= :memory store-backend) (nil? store-id))
     (invalid! :store-id "store-id is required for durable storage."))
   (when (and (= :file store-backend) (str/blank? store-path))
     (invalid! :store-path "store-path is required for file storage."))
-  (when (= :s3 store-backend)
+  (when (#{:s3 :s3-lmdb} store-backend)
     (when (str/blank? s3-bucket)
       (invalid! :s3-bucket "s3-bucket is required for S3 storage."))
     (when (str/blank? s3-region)
       (invalid! :s3-region "s3-region is required for S3 storage.")))
+  (when (= :s3-lmdb store-backend)
+    (when (str/blank? lmdb-path)
+      (invalid! :lmdb-path "lmdb-path is required for s3-lmdb storage."))
+    (when-not (and (integer? lmdb-map-size) (pos? lmdb-map-size))
+      (invalid! :lmdb-map-size "lmdb-map-size must be positive.")))
   (doseq [[field value] [[:request-timeout-ms request-timeout-ms]
                          [:max-body-bytes max-body-bytes]
                          [:max-seed-servers max-seed-servers]
@@ -206,43 +216,58 @@
       (invalid! :nrepl-host "nREPL must bind to 127.0.0.1.")))
   config)
 
-(defn datahike-config
-  [{:keys [store-backend store-id store-path s3-bucket s3-region
+(defn- s3-store-config
+  [{:keys [store-id s3-bucket s3-region
            s3-endpoint-override s3-path-style-access? s3-access-key
-           s3-secret datahike-store-cache-size datahike-search-cache-size]}]
+           s3-secret]}]
+  (cond-> {:backend :s3
+           :bucket s3-bucket
+           :region s3-region
+           :id store-id}
+    s3-endpoint-override
+    (assoc :endpoint-override s3-endpoint-override)
+
+    s3-path-style-access?
+    (assoc :path-style-access? true)
+
+    s3-access-key
+    (assoc :access-key s3-access-key :secret s3-secret)))
+
+(defn- database-options
+  [{:keys [datahike-store-cache-size datahike-search-cache-size]} store]
+  {:store store
+   :schema-flexibility :write
+   :attribute-refs? true
+   :keep-history? false
+   :max-string-length 0
+   :store-cache-size datahike-store-cache-size
+   :search-cache-size datahike-search-cache-size
+   :index-config {:diff-buf-size 256}
+   :fuse-index-roots? true
+   :commit-graph? false})
+
+(defn datahike-config
+  [{:keys [store-backend store-id store-path lmdb-path lmdb-map-size]
+    :as runtime-config}]
   (case store-backend
     :memory nil
-    :file {:store {:backend :file
-                   :path store-path
-                   :id store-id}
-           :schema-flexibility :write
-           :attribute-refs? true
-           :keep-history? false
-           :max-string-length 0
-           :store-cache-size datahike-store-cache-size
-           :search-cache-size datahike-search-cache-size
-           :commit-graph? false}
-    :s3 {:store (cond-> {:backend :s3
-                         :bucket s3-bucket
-                         :region s3-region
-                         :id store-id}
-                  s3-endpoint-override
-                  (assoc :endpoint-override s3-endpoint-override)
-
-                  s3-path-style-access?
-                  (assoc :path-style-access? true)
-
-                  s3-access-key
-                  (assoc :access-key s3-access-key :secret s3-secret))
-         :schema-flexibility :write
-         :attribute-refs? true
-         :keep-history? false
-         :max-string-length 0
-         :store-cache-size datahike-store-cache-size
-         :search-cache-size datahike-search-cache-size
-         :index-config {:diff-buf-size 256}
-         :fuse-index-roots? true
-         :commit-graph? false}))
+    :file (database-options runtime-config
+                            {:backend :file
+                             :path store-path
+                             :id store-id})
+    :s3 (database-options runtime-config (s3-store-config runtime-config))
+    :s3-lmdb
+    (database-options
+     runtime-config
+     {:backend :tiered
+      :id store-id
+      :write-policy :write-through
+      :read-policy :frontend-first
+      :frontend-config {:backend :lmdb
+                        :path lmdb-path
+                        :map-size lmdb-map-size
+                        :id store-id}
+      :backend-config (s3-store-config runtime-config)})))
 
 (defn from-env
   ([] (from-env (System/getenv) {}))
@@ -284,6 +309,14 @@
          (assoc :s3-path-style-access?
                 (parse-bool-env :s3-path-style-access?
                                 (value "S3_PATH_STYLE_ACCESS")))
+
+         (value "LMDB_PATH")
+         (assoc :lmdb-path (value "LMDB_PATH"))
+
+         (value "LMDB_MAP_SIZE")
+         (assoc :lmdb-map-size
+                (parse-positive-long :lmdb-map-size
+                                     (value "LMDB_MAP_SIZE")))
 
          (value "DATAHIKE_STORE_CACHE_SIZE")
          (assoc :datahike-store-cache-size

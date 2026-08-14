@@ -1,10 +1,17 @@
 (ns eacl-datahike-demo.integration-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [datahike.api :as d]
             [eacl.core :as eacl]
             [eacl.datahike.core :as datahike-eacl]
             [eacl-datahike-demo.data :as data]
+            [eacl-datahike-demo.eacl-adapter :as eacl-adapter]
             [eacl-datahike-demo.system :as system]
             [eacl-datahike-demo.test-support :as support]))
+
+(deftest seed-resume-uses-the-durable-account-counter
+  (support/with-test-system [system]
+    (is (= 4 (#'data/next-account-number (d/db (:conn system)))))))
 
 (deftest removed-coherence-authority-is-deliberately-invalid
   (support/with-test-system [system]
@@ -16,6 +23,22 @@
                   (catch clojure.lang.ExceptionInfo exception exception))]
       (is (some? error))
       (is (= :eacl/invalid-config (:type (ex-data error)))))))
+
+(deftest tiered-identity-bridge-preserves-exact-count-cache-hits
+  (support/with-test-system [system]
+    (let [client (eacl-adapter/make-tiered-client
+                  (:conn system)
+                  (system/client-options (:config system)))
+          query {:subject (data/->object :user "user-1")
+                 :permission :view
+                 :resource/type :server
+                 :count-limit 30000
+                 :cache? true}
+          first-count (eacl/count-resources client query)
+          repeated-count (eacl/count-resources client query)]
+      (is (= (:count first-count) (:count repeated-count)))
+      (is (false? (:cached? first-count)))
+      (is (true? (:cached? repeated-count))))))
 
 (deftest real-eacl-query-endpoints
   (support/with-test-system [system]
@@ -104,24 +127,9 @@
       (is (= "disabled"
              (get-in (support/meta-data response) [:cacheStatus]))))))
 
-(deftest canonical-cache-prewarm-is-bounded-and-reusable
-  (support/with-test-system [system]
-    (let [token (eacl/cancellation-token)
-          warmed (system/prewarm-cache! system token)
-          reused (eacl/lookup-resources
-                  (:acl system)
-                  {:subject (data/->object :user "user-1")
-                   :permission :view
-                   :resource/type :server
-                   :first 20
-                   :cache? true})
-          stats (datahike-eacl/cache-stats (:acl system))]
-      (is (= :complete (:status warmed)))
-      (is (= 20 (:storage-prime-items warmed)))
-      (is (= 20 (:page-items warmed)))
-      (is (true? (:cached? reused)))
-      (is (= 1 (:exact-entries stats)))
-      (is (zero? (get-in stats [:subproblems :oversized-rejections]))))))
+;; The boot-time cache prewarm was removed with the engine behavior it
+;; masked; a cold canonical first page is now cheap by construction and
+;; is covered by the ordinary lookup gates above.
 
 (deftest seed-submission-window-is-bounded-and-concurrent
   (let [active (atom 0)
@@ -197,14 +205,19 @@
         (is (= 422 (:status invalid)))
         (is (= (:source original-data) (:source (support/data after-invalid)))))
       (testing "successful writes advance the data revision"
-        (let [written (support/request handler :put "/api/schema"
-                                       {:source data/recursive-schema})]
+        (let [extended-schema
+              (str/replace
+               data/recursive-schema
+               "  permission view = admin + parent->view + account->view + team->view + vpc->view + shared_admin\n}"
+               "  permission view = admin + parent->view + account->view + team->view + vpc->view + shared_admin\n  permission inspect = view\n}")
+              written (support/request handler :put "/api/schema"
+                                       {:source extended-schema})]
           (is (= 200 (:status written)))
           (is (not= (get-in (support/meta-data original) [:revision])
                     (get-in (support/meta-data written) [:revision])))
-          (is (= data/recursive-schema (:source (support/data written))))
+          (is (= extended-schema (:source (support/data written))))
           (is (= 200 (:status (support/request handler :put "/api/schema"
-                                              {:source data/default-schema}))))))
+                                              {:source data/recursive-schema}))))))
       (testing "cache queries report provenance and eviction advances generation"
         (let [query-1 (support/request handler :post "/api/eacl/check-permission"
                                        {:subject support/super-user

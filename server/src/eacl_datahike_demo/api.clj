@@ -90,7 +90,11 @@
         (catch Exception ex
           (runtime/record-operation!
            system operation (contracts/elapsed-ms started) false 0 nil)
-          (throw ex)))
+          (if (eacl/cancelled? cancellation-token)
+            (throw (ex-info "Request cancelled."
+                            {:type :eacl.execution/cancelled}
+                            ex))
+            (throw ex))))
       (finally
         (.release permits)))))
 
@@ -151,9 +155,13 @@
       (contracts/api-error 400 "invalid-page-size"
                            "limit must be a supported page size."
                            {:supported data/page-size-options}))
+    ;; Demo user IDs are a deterministic function of committed account batches.
+    ;; Deriving the page from the maintained server total avoids re-scanning and
+    ;; sorting every persisted user while expensive EACL traversals are active.
     (contracts/success
      system request
-     (data/known-subjects (:total-servers @(:!seed-progress system))
+     (data/known-subjects nil
+                          (:total-servers @(:!seed-progress system))
                           offset limit))))
 
 (defn- handle-lookup-resources
@@ -326,9 +334,6 @@
    system request
    {:provider (datahike-eacl/cache-stats (:acl system))
     :operations (runtime/metrics-snapshot system)
-    :prewarm (some-> (or (some-> system :!cache-prewarm deref)
-                         (:cache-prewarm system))
-                     :state deref)
     :captured-at (Instant/now)}))
 
 (defn- handle-cache-evict

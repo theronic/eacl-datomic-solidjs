@@ -63,6 +63,24 @@
              (get-in (support/response-body response) [:error :code])))
       (is (not (re-find #"internal" (:body response)))))))
 
+(deftest recursive-traversal-limit-is-actionable-and-sanitized
+  (support/with-test-system [system]
+    (let [response
+          (contracts/exception->response
+           system {:request-id "limit-request"}
+           (ex-info "Generated recursive traversal safety limit exceeded."
+                    {:eacl/error :eacl.recursive-traversal/limit-exceeded
+                     :limit-kind :advanced-datoms
+                     :limit 100000}))
+          body (support/response-body response)]
+      (is (= 422 (:status response)))
+      (is (= "traversal-limit-exceeded"
+             (get-in body [:error :code])))
+      (is (= (str "The request exceeded the authorization traversal "
+                  "safety limit. Reduce the requested count and retry.")
+             (get-in body [:error :message])))
+      (is (not (re-find #"advanced-datoms|100000" (:body response)))))))
+
 (deftest relay-cursor-failures-have-an-actionable-public-message
   (support/with-test-system [system]
     (let [response

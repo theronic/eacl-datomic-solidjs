@@ -31,13 +31,43 @@
       (is (= 200 (:status response)))
       (is (= 2 @attempts)))))
 
+(deftest subject-pages-use-the-maintained-deterministic-fixture-plan
+  (support/with-test-system [system]
+    (let [known-subjects data/known-subjects
+          database-arguments (atom [])
+          response
+          (with-redefs [data/known-subjects
+                        (fn [db & args]
+                          (swap! database-arguments conj db)
+                          (apply known-subjects db args))]
+            (support/request (:handler system) :get
+                             "/api/subjects?offset=0&limit=10"))]
+      (is (= 200 (:status response)))
+      (is (= [nil] @database-arguments))
+      (is (= 19 (get-in (support/data response) [:pageInfo :total]))))))
+
 (deftest deterministic-seed-totals-and-subject-pages
-  (is (= {:servers 550034 :accounts 279 :teams 1108 :vpcs 554 :users 1944}
+  (is (= {:servers 550034 :accounts 139 :teams 548 :vpcs 274 :users 964}
          (data/totals nil 550034)))
   (let [page (data/known-subjects 550034 0 10)]
-    (is (= 1944 (get-in page [:page-info :total])))
+    (is (= 964 (get-in page [:page-info :total])))
     (is (= 10 (count (:data page))))
     (is (true? (get-in page [:page-info :has-next-page?])))))
+
+(deftest million-seed-plan-is-exact-weighted-and-reproducible
+  (let [target (- 1000000 48)
+        plan (data/requested-account-plan 4 target)
+        repeated (data/requested-account-plan 4 target)
+        sizes (mapv :server-count plan)
+        mean (/ (double (reduce + sizes)) (count sizes))]
+    (is (= plan repeated))
+    (is (= target (reduce + sizes)))
+    (is (every? #(<= 1 % 50000) sizes))
+    (is (< 4000 mean 6000))
+    (is (> (/ (double (count (filter #(<= % 7500) sizes)))
+              (count sizes))
+           0.75))
+    (is (some #(> % 20000) sizes))))
 
 (deftest eacl-requests-honor-a-cancelled-http-token
   (support/with-test-system [system]
@@ -49,6 +79,25 @@
           response
           (support/request handler :post "/api/eacl/lookup-resources"
                            (assoc support/lookup-resources-body :cache false))]
+      (is (= 499 (:status response)))
+      (is (= "request-cancelled"
+             (get-in (support/response-body response) [:error :code])))
+      (is (= 4 (.availablePermits (:eacl-permits system)))))))
+
+(deftest interrupted-storage-read-after-http-cancel-is-not-a-500
+  (support/with-test-system [system]
+    (let [token (eacl/cancellation-token)
+          _ (eacl/cancel! token)
+          handler (fn [request]
+                    ((:handler system)
+                     (assoc request :eacl/cancellation-token token)))
+          response
+          (with-redefs [eacl/lookup-resources
+                        (fn [_ _]
+                          (throw (ex-info "SDK request aborted" {})))]
+            (support/request handler :post "/api/eacl/lookup-resources"
+                             (assoc support/lookup-resources-body
+                                    :cache false)))]
       (is (= 499 (:status response)))
       (is (= "request-cancelled"
              (get-in (support/response-body response) [:error :code])))
@@ -68,17 +117,12 @@
       (is (= 405 (:status (support/request handler :post "/api/health" {}))))
       (is (= 200 (:status (support/request handler :get "/any/client/route")))))))
 
-(deftest cache-report-reads-live-prewarm-state
+(deftest cache-report-has-no-prewarm-section
   (support/with-test-system [system]
-    (let [state (atom {:status :running})
-          _ (reset! (:!cache-prewarm system) {:state state})
-          read-state #(get-in (support/data
-                               (support/request (:handler system)
-                                                :get "/api/cache"))
-                              [:prewarm :status])]
-      (is (= "running" (read-state)))
-      (reset! state {:status :complete :page-items 20})
-      (is (= "complete" (read-state))))))
+    (let [body (support/data
+                (support/request (:handler system) :get "/api/cache"))]
+      (is (not (contains? body :prewarm))
+          "the boot-time prewarm is gone; the report must not advertise it"))))
 
 (deftest content-type-body-and-field-errors
   (support/with-test-system [system]

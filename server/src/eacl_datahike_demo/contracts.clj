@@ -279,18 +279,25 @@
             (str/includes? (str/lower-case message) "cursor"))
         deadline? (= :eacl.execution/deadline-exceeded (:type data))
         cancelled? (= :eacl.execution/cancelled (:type data))
+        traversal-limit?
+        (= :eacl.recursive-traversal/limit-exceeded (:eacl/error data))
         status (or (:http/status data)
                    (when deadline? 504)
                    (when cancelled? 499)
+                   (when traversal-limit? 422)
                    (when cursor-error? 409)
                    500)
         code (or (:error/code data)
                  (when deadline? "execution-timeout")
                  (when cancelled? "request-cancelled")
+                 (when traversal-limit? "traversal-limit-exceeded")
                  (when cursor-error? "invalid-cursor")
                  "internal-error")
         safe-message (cond
                        cancelled? "The client cancelled the request."
+                       traversal-limit?
+                       (str "The request exceeded the authorization traversal "
+                            "safety limit. Reduce the requested count and retry.")
                        (and cursor-error? (= 409 status))
                        (str "This page cursor is no longer valid for the current "
                             "query or deployment. Start again from the first page.")

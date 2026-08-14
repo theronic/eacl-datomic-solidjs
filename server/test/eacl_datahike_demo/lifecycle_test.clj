@@ -81,3 +81,26 @@
         (when (d/database-exists? database-config)
           (d/delete-database database-config))
         (Files/deleteIfExists directory)))))
+
+(deftest restart-reconnects-when-the-datahike-cache-size-changes
+  (let [first-system (system/build-system config/default-config)
+        !replacement (atom nil)]
+    (try
+      (reset! system/!system first-system)
+      (with-redefs-fn
+        {#'eacl-datahike-demo.system/listen!
+         (fn [replacement]
+           (reset! !replacement replacement)
+           (reset! system/!system replacement)
+           replacement)}
+        #(system/restart!
+          (assoc config/default-config :datahike-store-cache-size 4096)))
+      (is (some? @!replacement))
+      (is (not (identical? (:conn first-system) (:conn @!replacement))))
+      (is (= 4096 (get-in @!replacement
+                          [:config :datahike-store-cache-size])))
+      (is (= 48 (data/count-servers (d/db (:conn @!replacement)))))
+      (finally
+        (when-let [running @system/!system]
+          (reset! system/!system nil)
+          (system/close-system! running))))))

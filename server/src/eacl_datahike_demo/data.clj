@@ -2,7 +2,8 @@
   "Standalone demo schema, fixtures, metadata reads, and append-only seeding."
   (:require [datahike.api :as d]
             [eacl.core :as eacl]
-            [eacl.datahike.schema :as schema]))
+            [eacl.datahike.schema :as schema])
+  (:import (java.lang.management ManagementFactory)))
 
 (def page-size-options [10 20 50 100 250 500 1000])
 (def default-page-size 20)
@@ -121,22 +122,56 @@ definition server {
    {:db/ident :demo/server-count
     :db/doc "Durable server-resource contribution used for O(accounts) startup totals."
     :db/cardinality :db.cardinality/one
+    :db/valueType :db.type/long}
+   {:db/ident :demo/account-number
+    :db/doc "Deterministic seed account ordinal used for resumable imports."
+    :db/cardinality :db.cardinality/one
+    :db/valueType :db.type/long
+    :db/index true}
+   {:db/ident :demo/server-number
+    :db/doc "Server ordinal within its deterministic seed account."
+    :db/cardinality :db.cardinality/one
+    :db/valueType :db.type/long
+    :db/index true}
+   {:db/ident :demo/total-servers
+    :db/doc "Durable exact server total for constant-time bootstrap reads."
+    :db/cardinality :db.cardinality/one
+    :db/valueType :db.type/long}
+   {:db/ident :demo/account-count
+    :db/doc "Durable completed account total."
+    :db/cardinality :db.cardinality/one
+    :db/valueType :db.type/long}
+   {:db/ident :demo/team-count
+    :db/doc "Durable completed team total."
+    :db/cardinality :db.cardinality/one
+    :db/valueType :db.type/long}
+   {:db/ident :demo/vpc-count
+    :db/doc "Durable completed VPC total."
+    :db/cardinality :db.cardinality/one
+    :db/valueType :db.type/long}
+   {:db/ident :demo/user-count
+    :db/doc "Durable completed fixture user total."
+    :db/cardinality :db.cardinality/one
     :db/valueType :db.type/long}])
 
 (def demo-profile
   {:accounts 4
    :teams-per-account 2
    :vpcs-per-account 1
-   :servers-per-account 12})
+   :servers-per-account 12
+   :recursive? true})
 
 (def interactive-profile
   {:teams-per-account 4
    :vpcs-per-account 2
-   :servers-per-account 2000})
+   :recursive? true})
 
-(def default-seed-transaction-size 250)
+(def default-seed-transaction-size 1000)
 (def default-seed-pause-ms 0)
-(def default-seed-in-flight 4)
+(def default-seed-in-flight 2)
+(def seed-account-group-size 4)
+(def seed-server-group-size 8)
+(def fixture-plan-version 1)
 
 (def ready-progress
   {:status :ready
@@ -151,6 +186,17 @@ definition server {
   [type id]
   (eacl/spice-object type id))
 
+(defn- await-datahike!
+  [result]
+  (let [value (if (instance? clojure.lang.IDeref result) @result result)]
+    (if (instance? Throwable value)
+      (throw value)
+      value)))
+
+(defn- transact!
+  [conn tx-data]
+  (await-datahike! (d/transact conn tx-data)))
+
 (defn count-servers
   [db]
   (d/q '[:find (count ?server) .
@@ -158,16 +204,23 @@ definition server {
        db))
 
 (defn maintained-server-count
-  "Returns the durable O(accounts) server total, or nil for an unmigrated store."
+  "Returns the durable constant-time server total, with an old-store fallback."
   [db]
-  (when (d/q '[:find ?attribute .
-               :where [?attribute :db/ident :demo/server-count]]
-             db)
-    (let [rows (d/q '[:find ?entity ?count
-                      :where [?entity :demo/server-count ?count]]
-                    db)]
-      (when (seq rows)
-        (reduce + (map second rows))))))
+  (or (d/q '[:find ?count .
+             :where
+             [?totals :db/ident :eacl-datahike-demo/totals]
+             [?totals :demo/total-servers ?count]]
+           db)
+      (when (d/q '[:find ?attribute .
+                   :where [?attribute :db/ident :demo/server-count]]
+                 db)
+        (let [rows (d/q '[:find ?account ?count
+                          :where
+                          [?account :demo/type :account]
+                          [?account :demo/server-count ?count]]
+                        db)]
+          (when (seq rows)
+            (reduce + (map second rows)))))))
 
 (defn- parse-account-number
   [account-id]
@@ -176,18 +229,75 @@ definition server {
 
 (defn- next-account-number
   [db]
-  (->> (d/q '[:find [?account-id ...]
-               :where
-               [?account :demo/type :account]
-               [?account :eacl/id ?account-id]]
-             db)
-       (keep parse-account-number)
-       (reduce max -1)
-       inc))
+  (or (d/q '[:find ?count .
+             :where
+             [?totals :db/ident :eacl-datahike-demo/totals]
+             [?totals :demo/account-count ?count]]
+           db)
+      (let [accounts
+        (->> (d/q '[:find ?account-id
+                    :where
+                    [?account :demo/type :account]
+                    [?account :eacl/id ?account-id]]
+                  db)
+             (map first)
+             (keep (fn [account-id]
+                     (when-let [number (parse-account-number account-id)]
+                       [number account-id])))
+             (sort-by first)
+             vec)
+        completed
+        (->> (d/q '[:find [?account-id ...]
+                     :where
+                     [?account :demo/type :account]
+                     [?account :eacl/id ?account-id]
+                     [?account :demo/server-count]]
+                   db)
+             set)]
+        (or (some (fn [[number account-id]]
+                    (when-not (contains? completed account-id) number))
+                  accounts)
+            (inc (reduce max -1 (map first accounts)))))))
+
+(defn weighted-account-server-count
+  "Return a reproducible 1..50,000 account size weighted toward small accounts.
+  Across a large plan the expected mean is 4,978 servers."
+  [account-number]
+  (let [random (java.util.SplittableRandom.
+                (long (+ 20260813 (* 104729 account-number))))
+        selection (.nextDouble random)
+        [minimum maximum]
+        (cond
+          (< selection 0.55) [1 2000]
+          (< selection 0.84) [2001 7500]
+          (< selection 0.96) [7501 20000]
+          :else [20001 50000])]
+    (.nextLong random (long minimum) (long (inc maximum)))))
+
+(defn requested-account-plan
+  "Plan exact deterministic account sizes from an absolute account ordinal."
+  [account-start server-count]
+  (loop [account-number account-start
+         remaining server-count
+         plan []]
+    (if (pos? remaining)
+      (let [server-count (min remaining
+                              (weighted-account-server-count account-number))]
+        (recur (inc account-number)
+               (- remaining server-count)
+               (conj plan {:account-number account-number
+                           :server-count server-count})))
+      plan)))
+
+(defn- recursive-account-parent-number
+  [account-number]
+  (when (and (pos? account-number)
+             (not (zero? (mod account-number seed-account-group-size))))
+    (dec account-number)))
 
 (defn- account-batch
   [account-number {:keys [teams-per-account vpcs-per-account
-                          servers-per-account]}]
+                          servers-per-account recursive?]}]
   (let [account-id (str "account-" account-number)
         account-tempid (d/tempid :db.part/user)
         owner-tempid (d/tempid :db.part/user)
@@ -256,31 +366,43 @@ definition server {
                 :eacl/id server-id
                 :demo/type :server
                 :demo/name (str "Server " (inc server-number) " · " account-id)
-                :server/name (str "Server " (inc server-number))}]
+                :server/name (str "Server " (inc server-number))
+                :demo/server-number server-number}]
               :relationships
-              [(eacl/->Relationship
-                (->object :account account-id)
-                :account
-                (->object :server server-id))
-               (eacl/->Relationship
-                (->object :team
-                          (nth team-ids
-                               (mod server-number teams-per-account)))
-                :team
-                (->object :server server-id))
-               (eacl/->Relationship
-                (->object :vpc
-                          (nth vpc-ids
-                               (mod server-number vpcs-per-account)))
-                :vpc
-                (->object :server server-id))]}))
+              (cond->
+               [(eacl/->Relationship
+                 (->object :account account-id)
+                 :account
+                 (->object :server server-id))
+                (eacl/->Relationship
+                 (->object :team
+                           (nth team-ids
+                                (mod server-number teams-per-account)))
+                 :team
+                 (->object :server server-id))
+                (eacl/->Relationship
+                 (->object :vpc
+                           (nth vpc-ids
+                                (mod server-number vpcs-per-account)))
+                 :vpc
+                 (->object :server server-id))]
+                (and recursive?
+                     (pos? server-number)
+                     (not (zero? (mod server-number seed-server-group-size))))
+                (conj
+                 (eacl/->Relationship
+                  (->object :server
+                            (str account-id "-server-" (dec server-number)))
+                  :parent
+                  (->object :server server-id))))}))
          (range servers-per-account))
         entities
         (concat
          [{:db/id account-tempid
            :eacl/id account-id
            :demo/type :account
-           :demo/name (str "Account " (inc account-number))}
+           :demo/name (str "Account " (inc account-number))
+           :demo/account-number account-number}
           {:db/id owner-tempid
            :eacl/id owner-id
            :demo/type :user
@@ -290,7 +412,8 @@ definition server {
          (mapcat :entities server-data))
         relationships
         (concat
-         [(eacl/->Relationship
+         (cond->
+          [(eacl/->Relationship
            (->object :platform "platform")
            :platform
            (->object :account account-id))
@@ -298,11 +421,21 @@ definition server {
            (->object :user owner-id)
            :owner
            (->object :account account-id))]
+           (and recursive? (recursive-account-parent-number account-number))
+           (conj
+            (eacl/->Relationship
+             (->object :account
+                       (str "account-"
+                            (recursive-account-parent-number account-number)))
+             :parent
+             (->object :account account-id))))
          (mapcat :relationships team-data)
          (mapcat :relationships vpc-data)
          (mapcat :relationships server-data))]
     {:account-id account-id
      :server-count servers-per-account
+     :team-count teams-per-account
+     :vpc-count vpcs-per-account
      :entities (vec entities)
      :relationships (vec relationships)}))
 
@@ -314,14 +447,42 @@ definition server {
      (mapv #(eacl/->RelationshipUpdate :touch %) relationships))))
 
 (defn- record-account-server-count!
-  [conn account-id server-count]
-  (d/transact conn [{:db/id [:eacl/id account-id]
-                     :demo/server-count server-count}]))
+  [conn account-id server-count team-count vpc-count]
+  (let [db (d/db conn)
+        account (d/entity db [:eacl/id account-id])]
+    (when-not (:demo/server-count account)
+      (let [totals (d/entity db :eacl-datahike-demo/totals)]
+        (transact!
+         conn
+         [{:db/id [:eacl/id account-id]
+           :demo/server-count server-count}
+          {:db/id [:db/ident :eacl-datahike-demo/totals]
+           :demo/total-servers (+ (:demo/total-servers totals) server-count)
+           :demo/account-count (inc (:demo/account-count totals))
+           :demo/team-count (+ (:demo/team-count totals) team-count)
+           :demo/vpc-count (+ (:demo/vpc-count totals) vpc-count)
+           :demo/user-count (+ (:demo/user-count totals)
+                               1 team-count vpc-count)}])))))
 
 (defn- paced!
   [pause-ms]
   (when (pos? pause-ms)
     (Thread/sleep pause-ms)))
+
+(def ^:private seed-gc-threshold 0.65)
+
+(defn- request-seed-gc-if-needed!
+  "Bound import allocation pressure at a completed transaction window.
+  Datahike/S3 index rewriting can produce several GiB of reclaimable heap even
+  though the connected database's live set is much smaller."
+  []
+  (let [usage (.getHeapMemoryUsage (ManagementFactory/getMemoryMXBean))
+        maximum (.getMax usage)
+        used (.getUsed usage)]
+    (when (and (pos? maximum)
+               (>= (/ (double used) maximum) seed-gc-threshold))
+      (System/gc)
+      true)))
 
 (defn- submit-windows!
   [items in-flight submit! pause-ms]
@@ -335,6 +496,10 @@ definition server {
                         jobs)]
       (when-let [failure (some #(when (instance? Throwable %) %) results)]
         (throw failure)))
+    ;; A completed in-flight window is a safe point: all submitted Datahike
+    ;; transactions are durable and no application future still uses the
+    ;; allocation-heavy pre-commit database values.
+    (request-seed-gc-if-needed!)
     (paced! pause-ms)))
 
 (defn- transact-entity-chunks!
@@ -342,7 +507,7 @@ definition server {
   (submit-windows!
    (partition-all transaction-size entities)
    in-flight
-   #(d/transact conn (vec %))
+   #(transact! conn (vec %))
    pause-ms))
 
 (defn- write-relationship-chunks!
@@ -353,9 +518,85 @@ definition server {
    #(write-relationships! acl %)
    pause-ms))
 
+(defn- account-scaffold
+  [account-number server-count]
+  (let [teams-per-account (min (:teams-per-account interactive-profile)
+                               server-count)
+        vpcs-per-account (min (:vpcs-per-account interactive-profile)
+                              server-count)
+        profile (assoc interactive-profile
+                       :servers-per-account 0
+                       :teams-per-account teams-per-account
+                       :vpcs-per-account vpcs-per-account)
+        scaffold (account-batch account-number profile)]
+    (assoc scaffold
+           :server-count server-count
+           :teams-per-account teams-per-account
+           :vpcs-per-account vpcs-per-account)))
+
+(defn- server-entity
+  [account-id server-number]
+  {:db/id (d/tempid :db.part/user)
+   :eacl/id (str account-id "-server-" server-number)
+   :demo/type :server
+   :demo/name (str "Server " (inc server-number) " · " account-id)
+   :server/name (str "Server " (inc server-number))
+   :demo/server-number server-number})
+
+(defn- server-relationships
+  [account-id teams-per-account vpcs-per-account server-number]
+  (let [server (->object :server (str account-id "-server-" server-number))]
+    (cond->
+     [(eacl/->Relationship
+       (->object :account account-id) :account server)
+      (eacl/->Relationship
+       (->object :team
+                 (str account-id "-team-"
+                      (mod server-number teams-per-account)))
+       :team server)
+      (eacl/->Relationship
+       (->object :vpc
+                 (str account-id "-vpc-"
+                      (mod server-number vpcs-per-account)))
+       :vpc server)]
+      (and (pos? server-number)
+           (not (zero? (mod server-number seed-server-group-size))))
+      (conj
+       (eacl/->Relationship
+        (->object :server
+                  (str account-id "-server-" (dec server-number)))
+        :parent server)))))
+
+(defn- seed-account!
+  [conn acl account-number server-count transaction-size in-flight pause-ms]
+  (let [{:keys [account-id entities relationships
+                teams-per-account vpcs-per-account]}
+        (account-scaffold account-number server-count)
+        server-numbers (range server-count)]
+    ;; A repeated attempt upserts the deterministic scaffold and relationships.
+    (transact! conn entities)
+    (write-relationships! acl relationships)
+    (submit-windows!
+     (partition-all transaction-size server-numbers)
+     in-flight
+     (fn [numbers]
+       (transact! conn (mapv #(server-entity account-id %) numbers)))
+     pause-ms)
+    (write-relationship-chunks!
+     acl
+     (mapcat #(server-relationships account-id teams-per-account
+                                    vpcs-per-account %)
+             server-numbers)
+     transaction-size in-flight pause-ms)
+    (record-account-server-count! conn account-id server-count
+                                  teams-per-account vpcs-per-account)
+    {:account-id account-id
+     :account-number account-number
+     :server-count server-count}))
+
 (defn- install-root-fixtures!
   [conn acl]
-  (d/transact
+  (transact!
    conn
    [{:db/id (d/tempid :db.part/user)
       :db/ident :test/platform
@@ -377,6 +618,14 @@ definition server {
       :eacl/id "user-2"
       :demo/type :user
       :demo/name "User 2"}])
+  (transact!
+   conn
+   [{:db/ident :eacl-datahike-demo/totals
+     :demo/total-servers 0
+     :demo/account-count 0
+     :demo/team-count 0
+     :demo/vpc-count 0
+     :demo/user-count 3}])
   (eacl/write-relationship!
    acl
    {:operation :touch
@@ -389,11 +638,13 @@ definition server {
   (mapv
    (fn [offset]
      (let [account-number (+ account-start offset)
-           {:keys [account-id server-count entities relationships]}
+           {:keys [account-id server-count team-count vpc-count
+                   entities relationships]}
            (account-batch account-number profile)]
-       (d/transact conn entities)
+       (transact! conn entities)
        (write-relationships! acl relationships)
-       (record-account-server-count! conn account-id server-count)
+       (record-account-server-count! conn account-id server-count
+                                     team-count vpc-count)
        (progress! account-id (inc offset))
        account-id))
    (range (:accounts profile))))
@@ -406,44 +657,68 @@ definition server {
   ([conn acl]
    (install-demo! conn acl nil))
   ([conn acl legacy-server-count]
-   (when-not (entid (d/db conn) :demo/server-count)
-     (d/transact conn [(last demo-attributes)]))
+   (doseq [attribute demo-attributes
+           :when (not (entid (d/db conn) (:db/ident attribute)))]
+     (transact! conn [attribute]))
    (when-not (entid (d/db conn) :eacl-datahike-demo/demo-seeded)
-     (eacl/write-schema! acl default-schema)
+     (eacl/write-schema! acl recursive-schema)
      (install-root-fixtures! conn acl)
      (let [account-ids
            (install-accounts! conn acl demo-profile 0 (fn [_ _] nil))]
        (eacl/write-relationships!
         acl
         (mapv
-         (fn [account-id]
+         (fn [account-id user-id]
            (eacl/->RelationshipUpdate
             :touch
             (eacl/->Relationship
-             (->object :user "user-1")
+             (->object :user user-id)
              :owner
              (->object :account account-id))))
-         (take 2 account-ids))))
-     (d/transact conn [{:db/ident :eacl-datahike-demo/demo-seeded}]))
+         [(first account-ids) (second account-ids)]
+         ["user-1" "user-2"])))
+     (transact! conn [{:db/ident :eacl-datahike-demo/demo-seeded}]))
    (let [db (d/db conn)
          maintained-total (maintained-server-count db)
          total (or maintained-total
                    legacy-server-count
                    (count-servers db))]
      (when-not maintained-total
-       (d/transact conn [{:db/ident :eacl-datahike-demo/server-total
+       (transact! conn [{:db/ident :eacl-datahike-demo/server-total
                           :demo/server-count total}]))
      (assoc ready-progress :total-servers total))))
 
-(defn- requested-server-counts
-  [server-count]
-  (loop [remaining server-count
-         counts []]
-    (if (pos? remaining)
-      (let [account-count
-            (min remaining (:servers-per-account interactive-profile))]
-        (recur (- remaining account-count) (conj counts account-count)))
-      counts)))
+(defn- quick-user-account-assignments
+  [seeded-accounts]
+  (let [candidates (or (seq (filter #(= (dec seed-account-group-size)
+                                         (mod (:account-number %)
+                                              seed-account-group-size))
+                                    seeded-accounts))
+                       seeded-accounts)]
+    (->> candidates
+         (sort-by (juxt #(Math/abs (long (- (:server-count %) 5000)))
+                        :account-number))
+         (take 2)
+         (map :account-id)
+         vec)))
+
+(defn- install-large-quick-user-access!
+  [conn acl seeded-accounts]
+  (when (and (seq seeded-accounts)
+             (nil? (entid (d/db conn)
+                          :eacl-datahike-demo/large-quick-users-assigned)))
+    (let [account-ids (quick-user-account-assignments seeded-accounts)
+          user-ids ["user-1" "user-2"]]
+      (write-relationships!
+       acl
+       (mapv (fn [user-id account-id]
+               (eacl/->Relationship
+                (->object :user user-id)
+                :owner
+                (->object :account account-id)))
+             user-ids account-ids))
+      (transact! conn [{:db/ident
+                         :eacl-datahike-demo/large-quick-users-assigned}]))))
 
 (defn reserve-seed!
   [!seed-running? server-count max-seed-servers]
@@ -474,8 +749,8 @@ definition server {
     transaction-size pause-ms in-flight]
   (let [started (System/nanoTime)
         servers-before (:total-servers @!seed-progress)
-        server-counts (requested-server-counts server-count)
-        account-start (next-account-number (d/db conn))]
+        account-start (next-account-number (d/db conn))
+        account-plan (requested-account-plan account-start server-count)]
     (try
       (reset! !seed-progress
               {:status :seeding
@@ -486,47 +761,33 @@ definition server {
                :label "Preparing Datahike transactions"
                :error nil})
       (let [result
-            (loop [remaining server-counts
-                   account-number account-start
+            (loop [remaining account-plan
                    completed 0
-                   account-ids []]
-              (if-let [account-server-count (first remaining)]
-                (let [profile (assoc interactive-profile
-                                     :accounts 1
-                                     :servers-per-account account-server-count)
-                      {:keys [account-id entities relationships]}
-                      (account-batch account-number profile)
+                   seeded-accounts []]
+              (if-let [{:keys [account-number]
+                        account-server-count :server-count}
+                       (first remaining)]
+                (let [_ (swap! !seed-progress assoc
+                               :label (str "Seeding account-" account-number
+                                           " (" account-server-count " servers)"))
+                      seeded-account
+                      (seed-account! conn acl account-number account-server-count
+                                     transaction-size in-flight pause-ms)
                       completed' (+ completed account-server-count)]
-                  (transact-entity-chunks!
-                   conn entities transaction-size in-flight pause-ms)
-                  (write-relationship-chunks!
-                   acl relationships transaction-size in-flight pause-ms)
-                  (record-account-server-count!
-                   conn account-id account-server-count)
                   (reset! !seed-progress
                           {:status :seeding
                            :servers-added 0
                            :servers-completed completed'
                            :servers-target server-count
                            :total-servers (+ servers-before completed')
-                           :label (str "Seeded " account-id)
+                           :label (str "Seeded " (:account-id seeded-account))
                            :error nil})
+                  (request-seed-gc-if-needed!)
                   (recur (next remaining)
-                         (inc account-number)
                          completed'
-                         (conj account-ids account-id)))
-                account-ids))]
-        (eacl/write-relationships!
-         acl
-         (mapv
-          (fn [account-id]
-            (eacl/->RelationshipUpdate
-             :touch
-             (eacl/->Relationship
-              (->object :user "user-1")
-              :owner
-              (->object :account account-id))))
-          (take 4 result)))
+                         (conj seeded-accounts seeded-account)))
+                seeded-accounts))]
+        (install-large-quick-user-access! conn acl result)
         (let [progress
               {:status :ready
                :servers-added server-count
@@ -653,34 +914,51 @@ definition server {
 (defn totals
   ([db]
    (totals db (count-servers db)))
-  ([_db server-count]
-   (let [base-accounts (:accounts demo-profile)
-         base-servers (* base-accounts (:servers-per-account demo-profile))
-         extra-servers (max 0 (- server-count base-servers))
-         servers-per-account (:servers-per-account interactive-profile)
-         extra-accounts (quot (+ extra-servers servers-per-account -1)
-                              servers-per-account)
-         accounts (+ base-accounts extra-accounts)]
-     {:servers server-count
-      :accounts accounts
-      :teams (+ (* base-accounts (:teams-per-account demo-profile))
-                (* extra-accounts (:teams-per-account interactive-profile)))
-      :vpcs (+ (* base-accounts (:vpcs-per-account demo-profile))
-               (* extra-accounts (:vpcs-per-account interactive-profile)))
-      :users (+ 3
-                (* base-accounts
-                   (+ 1 (:teams-per-account demo-profile)
-                      (:vpcs-per-account demo-profile)))
-                (* extra-accounts
-                   (+ 1 (:teams-per-account interactive-profile)
-                      (:vpcs-per-account interactive-profile))))})))
+  ([db server-count]
+   (if-let [durable
+            (when db
+              (let [entity (d/entity db :eacl-datahike-demo/totals)]
+                (when (:demo/total-servers entity)
+                  {:servers (:demo/total-servers entity)
+                   :accounts (:demo/account-count entity)
+                   :teams (:demo/team-count entity)
+                   :vpcs (:demo/vpc-count entity)
+                   :users (:demo/user-count entity)})))]
+     durable
+     (let [base-accounts (:accounts demo-profile)
+           base-servers (* base-accounts (:servers-per-account demo-profile))
+           extra-servers (max 0 (- server-count base-servers))
+           account-plan (requested-account-plan base-accounts extra-servers)
+           account-shape
+           (fn [{:keys [server-count]}]
+             {:teams (min (:teams-per-account interactive-profile)
+                          server-count)
+              :vpcs (min (:vpcs-per-account interactive-profile)
+                         server-count)})
+           shapes (map account-shape account-plan)
+           extra-accounts (count account-plan)
+           extra-teams (reduce + 0 (map :teams shapes))
+           extra-vpcs (reduce + 0 (map :vpcs shapes))]
+       {:servers server-count
+        :accounts (+ base-accounts extra-accounts)
+        :teams (+ (* base-accounts (:teams-per-account demo-profile))
+                  extra-teams)
+        :vpcs (+ (* base-accounts (:vpcs-per-account demo-profile))
+                 extra-vpcs)
+        :users (+ 3
+                  (* base-accounts
+                     (+ 1 (:teams-per-account demo-profile)
+                        (:vpcs-per-account demo-profile)))
+                  extra-accounts extra-teams extra-vpcs)}))))
 
 (defn- account-user-ids
-  [account-number]
+  [account-number server-count]
   (let [account-id (str "account-" account-number)
-        profile (if (< account-number (:accounts demo-profile))
-                  demo-profile
-                  interactive-profile)]
+        profile (if (< account-number (:accounts demo-profile)) demo-profile
+                    {:teams-per-account
+                     (min (:teams-per-account interactive-profile) server-count)
+                     :vpcs-per-account
+                     (min (:vpcs-per-account interactive-profile) server-count)})]
     (concat
      [(str account-id "-owner")]
      (map #(str account-id "-team-" % "-leader")
@@ -689,11 +967,30 @@ definition server {
           (range (:vpcs-per-account profile))))))
 
 (defn known-subjects
-  [server-count offset limit]
-  (let [account-count (:accounts (totals nil server-count))
+  ([server-count offset limit]
+   (known-subjects nil server-count offset limit))
+  ([db server-count offset limit]
+  (let [base-accounts (:accounts demo-profile)
+        base-servers (* base-accounts (:servers-per-account demo-profile))
+        planned-accounts
+        (concat
+         (map (fn [account-number]
+                {:account-number account-number
+                 :server-count (:servers-per-account demo-profile)})
+              (range base-accounts))
+         (requested-account-plan base-accounts
+                                 (max 0 (- server-count base-servers))))
         all
-        (->> (concat ["super-user" "user-1" "user-2"]
-                     (mapcat account-user-ids (range account-count)))
+        (->> (or (when db
+                   (seq (d/q '[:find [?user-id ...]
+                               :where
+                               [?user :demo/type :user]
+                               [?user :eacl/id ?user-id]]
+                             db)))
+                 (concat ["super-user" "user-1" "user-2"]
+                         (mapcat (fn [{:keys [account-number server-count]}]
+                                   (account-user-ids account-number server-count))
+                                 planned-accounts)))
              (map (fn [id] {:type :user :id id}))
              (sort-by :id)
              vec)
@@ -705,4 +1002,4 @@ definition server {
                  :has-previous-page? (pos? start)
                  :has-next-page? (< end total)
                  :next-offset (when (< end total) end)
-                 :total total}}))
+                 :total total}})))
