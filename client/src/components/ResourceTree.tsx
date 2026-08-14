@@ -41,10 +41,10 @@ type ScopedSuccess<T> = {
 
 const scopeKey = (...parts: unknown[]) => JSON.stringify(parts);
 
-// The current published EACL snapshot routes this acyclic schema through the
-// recursive engine. Production measurements place its default 100,000
-// advanced-datom ceiling between 30k and 40k super-user results. Keep the
-// automatic count below that safety limit until acyclic routing lands.
+// The stable-discovery engine completes a 30k demand-bounded count in about
+// five seconds cold on the production t4g.medium; an exact million-resource
+// count exceeds the server's 30-second execution deadline by design. Keep the
+// automatic count at 30k until the width>1 concurrent execution change lands.
 const initialCountLimit = 30_000;
 
 function RelationshipGroup(props: {

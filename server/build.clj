@@ -40,14 +40,14 @@
           (pr-str
            {:application "eacl-datahike-demo"
             :eacl-datahike/requested-version "8.0.0-SNAPSHOT"
-            :eacl-datahike/resolved-version "8.0.0-SNAPSHOT"
-            :eacl-datahike/source-pr 115
+            :eacl-datahike/resolved-version "8.0.0-20260814.204412-4"
+            :eacl-datahike/source-pr 116
             :eacl-datahike/source-commit
-            "142882c56e2e4f0c4e37a5740fd0f0db96d066e9"
+            "6cce96f15164fe42d1e2b55e58e32c307d5d0942"
             :eacl-datahike/jar-sha256
-            "4ca345d6d23fd3e4779e63df791cd529feaf44cf09737f07f1fbc42d1c6be501"
+            "e7ce549d764f872e42efc3ea201bb0e18a0ad0b7e9a3998c496e4acd5aba0c79"
             :eacl-core/jar-sha256
-            "6747516f56f6a867b9ac0140d2e0493d0fdedcff201a040c1b870ac3b4a2ab5b"
+            "d9793db2644ea123a6e28f335ec66003f5fd72494794ca8b23479dc4d7e5a1e7"
             :datahike/version "0.8.1759"
             :datahike-lmdb/version "0.1.8"
             :konserve-s3/version "0.1.37"
