@@ -32,7 +32,7 @@ cat <<EOF
 - CloudFormation template SHA-256: $template_sha
 - Root: encrypted 20 GiB gp3
 - VPC/subnet: isolated 10.80.0.0/16 / public 10.80.1.0/24 in $EACL_AVAILABILITY_ZONE
-- Bucket: $EACL_BUCKET_NAME (private, SSE-S3, versioned, seven-day noncurrent expiry, retained)
+- Bucket: $EACL_BUCKET_NAME (private, SSE-S3, unversioned, retained)
 - Store ID: $EACL_STORE_ID
 - IAM: dedicated-bucket ListBucket; object access only ${EACL_STORE_ID}_* (including ${EACL_STORE_ID}_.konserve-metadata)
 - SSH: approved CIDR ${EACL_OPERATOR_CIDR:-${operator_ip}/32} using $EACL_SSH_PUBLIC_KEY ($key_fingerprint)

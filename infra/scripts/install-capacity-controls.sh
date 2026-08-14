@@ -49,10 +49,16 @@ sudo install -o root -g root -m 0644 "$infra/caddy/Caddyfile.https" \
   /etc/eacl-datahike-demo/Caddyfile.https
 sudo install -o root -g root -m 0644 "$infra/caddy/Caddyfile.capacity" \
   /etc/eacl-datahike-demo/Caddyfile.capacity
+sudo install -o root -g root -m 0644 "$infra/caddy/Caddyfile.maintenance" \
+  /etc/eacl-datahike-demo/Caddyfile.maintenance
 sudo install -o root -g root -m 0755 "$infra/scripts/eacl-capacity-suspend" \
   /usr/local/sbin/eacl-capacity-suspend
 sudo install -o root -g root -m 0755 "$infra/scripts/eacl-capacity-resume" \
   /usr/local/sbin/eacl-capacity-resume
+sudo install -o root -g root -m 0755 "$infra/scripts/eacl-maintenance-start" \
+  /usr/local/sbin/eacl-maintenance-start
+sudo install -o root -g root -m 0755 "$infra/scripts/eacl-maintenance-end" \
+  /usr/local/sbin/eacl-maintenance-end
 
 site_address="$(systemctl show caddy --property=Environment --value | tr ' ' '\n' | sed -n 's/^EACL_SITE_ADDRESS=//p' | head -n 1)"
 [[ "$site_address" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
@@ -60,6 +66,8 @@ sudo env EACL_SITE_ADDRESS="$site_address" caddy validate \
   --config /etc/eacl-datahike-demo/Caddyfile.https
 sudo env EACL_SITE_ADDRESS="$site_address" caddy validate \
   --config /etc/eacl-datahike-demo/Caddyfile.capacity
+sudo env EACL_SITE_ADDRESS="$site_address" caddy validate \
+  --config /etc/eacl-datahike-demo/Caddyfile.maintenance
 sudo systemctl enable --now amazon-ssm-agent
 sudo systemctl is-active amazon-ssm-agent
 amazon-ssm-agent -version

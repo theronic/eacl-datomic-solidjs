@@ -59,6 +59,7 @@ jq -n --arg cidr "$operator_cidr" --arg key "$public_key" \
   --arg keyType "$key_type" --arg ami "$ami" \
   --arg storeId "$EACL_STORE_ID" --arg bucket "$EACL_BUCKET_NAME" \
   --arg instanceType "$EACL_INSTANCE_TYPE" \
+  --arg cpuCredits "${EACL_CPU_CREDITS:-standard}" \
   --arg availabilityZone "$EACL_AVAILABILITY_ZONE" \
   '[{ParameterKey:"OperatorCidr",ParameterValue:$cidr},
     {ParameterKey:"SshPublicKey",ParameterValue:$key},
@@ -67,6 +68,7 @@ jq -n --arg cidr "$operator_cidr" --arg key "$public_key" \
     {ParameterKey:"StoreId",ParameterValue:$storeId},
     {ParameterKey:"BucketName",ParameterValue:$bucket},
     {ParameterKey:"InstanceType",ParameterValue:$instanceType},
+    {ParameterKey:"CpuCredits",ParameterValue:$cpuCredits},
     {ParameterKey:"AvailabilityZone",ParameterValue:$availabilityZone}]' >"$parameters"
 
 aws_eacl cloudformation create-stack \

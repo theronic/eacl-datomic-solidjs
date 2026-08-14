@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+normal_config=/etc/eacl-datahike-demo/Caddyfile.https
+active_config=/etc/caddy/Caddyfile
+capacity_marker=/etc/eacl-datahike-demo/capacity-suspended
+site_address="$(systemctl show caddy --property=Environment --value | tr ' ' '\n' | sed -n 's/^EACL_SITE_ADDRESS=//p' | head -n 1)"
+
+test "$(id -u)" -eq 0 || { echo "run as root" >&2; exit 1; }
+[[ "$site_address" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
+test -f "$normal_config"
+test ! -e "$capacity_marker" || {
+  echo "capacity suspension is active; refusing to reopen the application" >&2
+  exit 1
+}
+systemctl is-active --quiet eacl-datahike-demo
+curl --fail --silent --show-error http://127.0.0.1:8088/api/health >/dev/null
+EACL_SITE_ADDRESS="$site_address" caddy validate --config "$normal_config"
+install -o root -g root -m 0644 "$normal_config" "$active_config"
+systemctl reload caddy
+curl --fail --silent --show-error --resolve "$site_address:443:127.0.0.1" \
+  "https://$site_address/datahike/api/health" >/dev/null
+echo "maintenance mode disabled; normal proxy restored"

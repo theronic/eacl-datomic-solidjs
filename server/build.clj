@@ -49,6 +49,7 @@
             :eacl-core/jar-sha256
             "6747516f56f6a867b9ac0140d2e0493d0fdedcff201a040c1b870ac3b4a2ab5b"
             :datahike/version "0.8.1759"
+            :datahike-lmdb/version "0.1.8"
             :konserve-s3/version "0.1.37"
             :java/target 26
             :dependency-manifest-sha256

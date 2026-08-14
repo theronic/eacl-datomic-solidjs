@@ -24,6 +24,7 @@ require_stack_config() {
   require_value EACL_STORE_ID
   require_value EACL_AVAILABILITY_ZONE
   require_value EACL_INSTANCE_TYPE
+  require_value EACL_CPU_CREDITS
   require_value EACL_SSH_PUBLIC_KEY
 }
 

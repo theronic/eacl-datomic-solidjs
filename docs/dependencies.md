@@ -28,6 +28,9 @@ commit first and regenerate this manifest.
 
 - `org.replikativ/datahike:0.8.1759`
 - `org.replikativ/konserve-s3:0.1.37`
+- `org.replikativ/datahike-lmdb:0.1.8` for the optional post-GC local
+  LMDB/S3 serving tier; it resolves `konserve-lmdb:0.1.16` while the application
+  retains the newer selected Konserve version below.
 - Selected `org.replikativ/konserve:0.9.369`; Datahike's older `0.9.363`
   declaration is superseded by the direct S3 backend dependency.
 - Konserve S3 JAR SHA-256: `b5ef10a34ca7c7235fa0d37e3f61107b2d075003a01ec4326e827d9fdc8ee808`

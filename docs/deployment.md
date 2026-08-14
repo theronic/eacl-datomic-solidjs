@@ -22,8 +22,9 @@ IDs, hostnames, addresses, store IDs, credentials, or operator key paths.
   ingress.
 - The root-owned application environment is mode `0600`. The signing key,
   admin token, and Datahike store ID remain stable across restarts.
-- The S3 bucket is private, encrypted, versioned, retained by CloudFormation,
-  and expires noncurrent versions after seven days.
+- The S3 bucket is private, encrypted, deliberately unversioned, and retained
+  by CloudFormation. Datahike supplies logical database history; S3 versioning
+  would retain storage that an exact Datahike sweep intends to reclaim.
 - Public Caddy routes deny schema writes, seeding, and cache eviction even
   though the application independently enforces the admin bearer token.
 
@@ -174,24 +175,34 @@ recovery, and public responsiveness. For a million-resource load, explicitly
 provide all deployment endpoints; the script has no production defaults:
 
 ```bash
-export EACL_PUBLIC_BASE="https://${EACL_SITE_ADDRESS}/datahike"
 export EACL_SSH_HOST="ubuntu@${EACL_INSTANCE_HOST}"
 export EACL_SSH_KEY="$EACL_SSH_PRIVATE_KEY"
-export EACL_NREPL_PORT=17888
-infra/scripts/seed-million-bounded.sh 1000048 20000
+infra/scripts/seed-million-bounded.sh 1000000
 ```
 
-The loader stops on RSS or host-memory safety thresholds, verifies committed
-totals after each restart, and never treats a client interruption as a request
-to delete durable data. After loading:
+The loader submits one resumable request for the exact remaining server count,
+uses 1,000-item transactions with two in flight and no delay, and polls only
+the loopback API through SSH. Run `eacl-maintenance-start` first so public
+browsers cannot create S3 GETs during import. The seed profile uses store cache
+1,000 and the approved unlimited T4g credits. After a completed two-transaction
+window, the loader requests GC only when used Java heap has reached 65% of its maximum;
+this bounds the measured reclaimable Datahike index-rewrite allocation pressure
+without adding an inter-transaction delay. A local monitor interruption does not
+cancel or delete the remote seed. After loading:
 
-1. remove the seed-only systemd drop-in;
-2. restore `standard` credits;
-3. start a clean normal-profile JVM;
-4. verify exactly 1,000,048 servers from S3;
-5. record cold and warm page/count latency, RSS, available memory, CPU credits,
+1. run exact `eacl-datahike-demo.system/gc-storage!` in the sole writer JVM and
+   record before/after bucket objects and bytes;
+2. remove the seed-only systemd drop-in;
+3. activate the empty local tier with `activate-lmdb-serving.sh`, then restart;
+4. restore `standard` credits with
+   `infra/scripts/update-cpu-credits.sh standard` and arm the new-bucket
+   capacity controller;
+5. verify exactly 1,000,000 servers from S3 and the LMDB tier;
+6. record cold and warm page/count latency, RSS, available memory, CPU credits,
    cache statistics, and S3 current/noncurrent storage;
-6. resize to the steady candidate only after operator approval and repeat the
+7. verify recursive paths, fixture distribution, cancellation, direct-S3
+   fallback, Telegram delivery, and every alarm before `eacl-maintenance-end`;
+8. resize to the steady candidate only after operator approval and repeat the
    clean-JVM gates.
 
 Production starts one asynchronous, cooperatively cancellable prewarm for the
@@ -230,6 +241,6 @@ export EACL_DNS_ROLLBACK_APPROVED="${EACL_DNS_NAME}:${EACL_PREVIOUS_A}"
 infra/scripts/rollback-dns.sh "$EACL_INSTANCE_HOST"
 ```
 
-CloudFormation retains the versioned bucket. Teardown therefore requires an
+CloudFormation retains the unversioned bucket. Teardown therefore requires an
 explicit decision to retain, export, or permanently empty it; application or
 DNS rollback must never delete the bucket.

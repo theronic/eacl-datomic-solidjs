@@ -9,6 +9,7 @@
          metosin/reitit-ring            {:mvn/version "0.7.2"}
          ch.qos.logback/logback-classic {:mvn/version "1.4.14"}
          nrepl/nrepl                    {:mvn/version "1.5.2"}
+         org.replikativ/datahike-lmdb   {:mvn/version "0.1.8"}
          org.replikativ/konserve-s3     {:mvn/version "0.1.37"}
          ;; The published artifact includes EACL's generated JVM runtime.
          dev.eacl/eacl-datahike         {:mvn/version "8.0.0-SNAPSHOT"}}

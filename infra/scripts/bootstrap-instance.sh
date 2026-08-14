@@ -6,7 +6,7 @@ test "$(uname -m)" = aarch64 || { echo "expected aarch64" >&2; exit 1; }
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install --yes --no-install-recommends ca-certificates curl openssl
+apt-get install --yes --no-install-recommends ca-certificates curl liblmdb0 openssl
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 infra_dir="$(cd -- "$script_dir/.." && pwd)"
@@ -65,10 +65,16 @@ install -o root -g root -m 0644 "$infra_dir/caddy/Caddyfile.https" \
   /etc/eacl-datahike-demo/Caddyfile.https
 install -o root -g root -m 0644 "$infra_dir/caddy/Caddyfile.capacity" \
   /etc/eacl-datahike-demo/Caddyfile.capacity
+install -o root -g root -m 0644 "$infra_dir/caddy/Caddyfile.maintenance" \
+  /etc/eacl-datahike-demo/Caddyfile.maintenance
 install -o root -g root -m 0755 "$infra_dir/scripts/eacl-capacity-suspend" \
   /usr/local/sbin/eacl-capacity-suspend
 install -o root -g root -m 0755 "$infra_dir/scripts/eacl-capacity-resume" \
   /usr/local/sbin/eacl-capacity-resume
+install -o root -g root -m 0755 "$infra_dir/scripts/eacl-maintenance-start" \
+  /usr/local/sbin/eacl-maintenance-start
+install -o root -g root -m 0755 "$infra_dir/scripts/eacl-maintenance-end" \
+  /usr/local/sbin/eacl-maintenance-end
 install -o root -g root -m 0644 "$infra_dir/caddy/Caddyfile.http" /etc/caddy/Caddyfile
 caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload

@@ -9,7 +9,7 @@ User=eacl-datahike-demo
 Group=eacl-datahike-demo
 WorkingDirectory=/var/lib/eacl-datahike-demo
 EnvironmentFile=/etc/eacl-datahike-demo/eacl-datahike-demo.env
-ExecStart=/opt/java/temurin-26/bin/java -Xms256m -Xmx3g -XX:+UseG1GC -XX:NativeMemoryTracking=summary -XX:+ExitOnOutOfMemoryError -jar /opt/eacl-datahike-demo/current
+ExecStart=/opt/java/temurin-26/bin/java --enable-native-access=ALL-UNNAMED -Xms256m -Xmx3g -XX:+UseG1GC -XX:NativeMemoryTracking=summary -XX:+ExitOnOutOfMemoryError -jar /opt/eacl-datahike-demo/current
 Restart=on-failure
 RestartSec=5s
 SuccessExitStatus=143

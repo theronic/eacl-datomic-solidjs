@@ -172,20 +172,26 @@ EACL_DATAHIKE_DEMO_STORE_BACKEND=s3
 EACL_DATAHIKE_DEMO_STORE_ID=<stable-uuid>
 EACL_DATAHIKE_DEMO_S3_BUCKET=<globally-unique-private-bucket>
 EACL_DATAHIKE_DEMO_S3_REGION=<aws-region>
-EACL_DATAHIKE_DEMO_DATAHIKE_STORE_CACHE_SIZE=8192
+EACL_DATAHIKE_DEMO_DATAHIKE_STORE_CACHE_SIZE=1000
 EACL_DATAHIKE_DEMO_DATAHIKE_SEARCH_CACHE_SIZE=0
 EACL_DATAHIKE_DEMO_SECURITY_KEY=<at-least-32-random-characters>
 EACL_DATAHIKE_DEMO_ADMIN_TOKEN=<different-at-least-32-random-characters>
 EACL_DATAHIKE_DEMO_NREPL_PORT=7888
-EACL_DATAHIKE_DEMO_SEED_TRANSACTION_SIZE=250
+EACL_DATAHIKE_DEMO_SEED_TRANSACTION_SIZE=1000
 EACL_DATAHIKE_DEMO_SEED_PAUSE_MS=0
-EACL_DATAHIKE_DEMO_SEED_IN_FLIGHT=4
+EACL_DATAHIKE_DEMO_SEED_IN_FLIGHT=2
 EACL_DATAHIKE_DEMO_CACHE_MAX_ENTRIES=512
 EACL_DATAHIKE_DEMO_CACHE_PROJECTION_MAX_WEIGHT=4194304
 EACL_DATAHIKE_DEMO_CACHE_DENOTATION_MAX_WEIGHT=4194304
 EACL_DATAHIKE_DEMO_CACHE_ANSWER_MAX_WEIGHT=16777216
 EACL_DATAHIKE_DEMO_CACHE_MANAGED_PROOF_MAX_ATOMS=256
 ```
+
+After bulk import and exact offline GC, production changes
+`STORE_BACKEND=s3-lmdb`, sets `LMDB_PATH=/var/lib/eacl-datahike-demo/lmdb` and
+`LMDB_MAP_SIZE=8589934592`, and returns `DATAHIKE_STORE_CACHE_SIZE` to 8,192.
+The published `org.replikativ/datahike-lmdb:0.1.8` adapter requires native
+`liblmdb`; Java starts with `--enable-native-access=ALL-UNNAMED`.
 
 The store ID, signing key, and admin token must remain stable across restarts.
 Changing the signing key invalidates cursors and EACL-managed values. The
@@ -202,10 +208,10 @@ parameterized AWS procedure and capacity gates.
 ## Seed, recovery, and operations
 
 Always accept the 48-resource fixture first. Seed jobs are asynchronous and
-single-flight. They submit configurable 250-item transactions through a
-bounded four-request window so Datahike can auto-batch pending commits without
-allowing unbounded loader memory. Entity chunks finish before relationship
-chunks for each logical 2,000-server account. Poll
+single-flight. The production import uses configurable 1,000-item transactions
+through a bounded two-request window so Datahike can auto-batch pending commits
+without allowing unbounded loader memory. Entity chunks finish before
+relationship chunks for each weighted logical account. Poll
 `GET /api/seed`; the explorer remains readable between commits. Do not begin a
 large seed until small-fixture API, browser, restart, and S3 persistence checks
 pass.
@@ -233,7 +239,7 @@ curl --fail http://127.0.0.1:8088/api/health
 Rollback redeploys the preceding checksummed jar and restarts the service; it
 does not delete the retained S3 bucket. DNS rollback restores the captured
 stale A record only if publication fails. Teardown removes the CloudFormation
-stack after explicitly preserving or emptying the retained versioned bucket;
+stack after explicitly preserving or emptying the retained unversioned bucket;
 never delete that bucket as part of an application rollback.
 
 ## Project layout

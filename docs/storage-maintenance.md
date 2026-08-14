@@ -27,9 +27,17 @@ versions; it does not discover unreachable current keys.
 
 The loader submits chunks through a bounded in-flight window. Datahike's writer
 preserves transaction order while its commit loop drains pending transactions
-and persists the newest database state. Keeping four submissions in flight
+and persists the newest database state. Keeping two submissions in flight
 therefore lets Datahike auto-batch several logical transactions into fewer S3
 commits without constructing an unbounded import in memory.
+
+The production import also measures used/max Java heap after each completed
+two-transaction window, after its completed futures have left scope. If it has
+reached 65%, it requests a collection before submitting the next window. This
+is not transaction pacing: there is still no fixed delay, and collection is
+skipped below the threshold. It exists because the measured S3 index rewrite
+working set produced multiple GiB of reclaimable heap and a 5 GiB-heap import
+attempt exited with `OutOfMemoryError` before this guard was added.
 
 The required barriers are:
 
@@ -81,13 +89,52 @@ Before any production sweep:
    copy, invoke `gc-storage`, reconnect, and run permission/pagination tests;
 6. present the predicted delete scope, request cost, recovery method, and
    maintenance window for explicit operator approval;
-7. only then invoke `(datahike.api/gc-storage (:conn @system/!system))` through
-   the writer JVM's loopback-only nREPL;
+7. only then start `(eacl-datahike-demo.system/gc-storage!)` in a server-side
+   future through the writer JVM's loopback-only nREPL; the wrapper enforces
+   single-flight execution, waits for Datahike completion inside that future,
+   propagates failures, and returns only a deleted-key count rather than a huge
+   key set;
 8. wait for completion, restart cleanly, and rerun database, EACL, and browser
    acceptance before treating the maintenance as successful.
 
-With S3 versioning enabled, deletes create delete markers and old bytes become
-noncurrent. Current-object inventory should fall after the sweep, while billed
-all-version bytes decline only as the noncurrent-version lifecycle expires.
-Do not empty the bucket or shorten recovery retention as a substitute for a
-verified Datahike mark-and-sweep.
+The replacement production bucket is deliberately unversioned because Datahike
+provides database history. Exact GC therefore removes unreachable current bytes
+immediately. Import through direct S3 with store cache 1,000; only after GC
+reconnect through the local LMDB/S3 tier with serving cache 8,192. Populating
+LMDB during import would retain the same unreachable churn that GC is intended
+to remove.
+
+The cache size is connection configuration, not a mutable field on an open
+Datahike database. Through the SSH-only nREPL, apply a temporary size by
+restarting the owned system with an updated runtime configuration; `restart!`
+detects this field and reconnects the database rather than reusing the old
+connection:
+
+```clojure
+(let [running @eacl-datahike-demo.system/!system]
+  (eacl-datahike-demo.system/restart!
+   (assoc (:config running) :datahike-store-cache-size 8192)))
+```
+
+Do not enable `:online-gc`. `datahike.gc/start-background-gc!` is a separate
+experimental full-walk collector and is not scheduled for this mostly read-only
+demo because each cycle can create a large S3 GET burst. Do not empty a bucket
+as a substitute for a verified Datahike mark-and-sweep.
+
+Do not run a multi-hour GC as the top-level nREPL evaluation: client timeouts
+send an interrupt. Start it in the JVM and poll the future from separate short
+evaluations instead:
+
+```clojure
+(def production-gc-job
+  (future (eacl-datahike-demo.system/gc-storage!)))
+:started
+
+;; Poll without blocking the nREPL client.
+{:done? (future-done? production-gc-job)
+ :running? @(-> @eacl-datahike-demo.system/!system
+                 :!storage-gc-running?)}
+
+;; Dereference only after :done? is true; the result is a small summary map.
+@production-gc-job
+```

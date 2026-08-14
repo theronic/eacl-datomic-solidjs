@@ -21,6 +21,10 @@ Parameters:
     Type: String
     Default: t4g.medium
     AllowedValues: [t4g.medium, t4g.large]
+  CpuCredits:
+    Type: String
+    Default: standard
+    AllowedValues: [standard, unlimited]
   AvailabilityZone:
     Type: AWS::EC2::AvailabilityZone::Name
   RootVolumeGiB:
@@ -106,11 +110,6 @@ Resources:
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
-      LifecycleConfiguration:
-        Rules:
-          - Id: expire-noncurrent-after-seven-days
-            Status: Enabled
-            NoncurrentVersionExpiration: {NoncurrentDays: 7}
       MetricsConfigurations:
         - Id: DatahikeStore
           Prefix: !Sub "${StoreId}_"
@@ -119,7 +118,6 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      VersioningConfiguration: {Status: Enabled}
       Tags:
         - {Key: Name, Value: !Ref AWS::StackName}
         - {Key: Project, Value: eacl-datahike-demo}
@@ -239,7 +237,7 @@ Resources:
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref DatahikeInstanceProfile
       KeyName: !Ref ImportedKeyPair
-      CreditSpecification: {CPUCredits: standard}
+      CreditSpecification: {CPUCredits: !Ref CpuCredits}
       MetadataOptions:
         HttpEndpoint: enabled
         HttpPutResponseHopLimit: 1

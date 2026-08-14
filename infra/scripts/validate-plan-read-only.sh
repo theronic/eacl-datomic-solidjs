@@ -19,7 +19,7 @@ if rg -n --glob '!**/validate-plan-read-only.sh' \
 fi
 
 test "$(rg -c 'Default: t4g.medium' "$repo_root/infra/cloudformation.yaml")" = 1
-rg -q 'CPUCredits: standard' "$repo_root/infra/cloudformation.yaml"
+rg -q 'AllowedValues: \[standard, unlimited\]' "$repo_root/infra/cloudformation.yaml"
 rg -q 'Default: 20' "$repo_root/infra/cloudformation.yaml"
 if rg -n '/Users/|[0-9]{12}_|EACL_AWS_ACCOUNT=' \
   "$repo_root/infra" --glob '!deployment.env.example' \
@@ -56,6 +56,9 @@ docker run --rm --env EACL_SITE_ADDRESS=demo.invalid \
   caddy:2.11.4-alpine caddy validate --config /etc/caddy/Caddyfile
 docker run --rm --env EACL_SITE_ADDRESS=demo.invalid \
   --volume "$repo_root/infra/caddy/Caddyfile.capacity:/etc/caddy/Caddyfile:ro" \
+  caddy:2.11.4-alpine caddy validate --config /etc/caddy/Caddyfile
+docker run --rm --env EACL_SITE_ADDRESS=demo.invalid \
+  --volume "$repo_root/infra/caddy/Caddyfile.maintenance:/etc/caddy/Caddyfile:ro" \
   caddy:2.11.4-alpine caddy validate --config /etc/caddy/Caddyfile
 
 echo "read-only plan validation passed; no AWS resources were created or modified"

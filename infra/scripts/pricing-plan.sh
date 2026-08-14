@@ -44,9 +44,11 @@ for rate in "$ec2_hourly" "$gp3_gb_month" "$public_ipv4_hourly" \
   test -n "$rate"
 done
 
-current_bytes="${EACL_S3_CURRENT_BYTES:-14602949290}"
-noncurrent_bytes="${EACL_S3_NONCURRENT_BYTES:-257945173}"
-seed_puts="${EACL_SEED_PUTS:-1093050}"
+# Defaults are the exact replacement-store pre-GC inventory and the request
+# metric observed over its build window. Override current bytes after GC.
+current_bytes="${EACL_S3_CURRENT_BYTES:-8254861778}"
+noncurrent_bytes="${EACL_S3_NONCURRENT_BYTES:-0}"
+seed_puts="${EACL_SEED_PUTS:-749515}"
 [[ "$current_bytes" =~ ^[0-9]+$ ]]
 [[ "$noncurrent_bytes" =~ ^[0-9]+$ ]]
 [[ "$seed_puts" =~ ^[0-9]+$ ]]
@@ -66,7 +68,7 @@ jq -n \
             publicIpv4Hourly:$publicIpv4Hourly,s3GbMonth:$s3GbMonth,
             s3PutPerThousand:$s3PutPerThousand},
     assumptions:{hours:$hours,ebsGiB:$ebsGiB,currentBytes:$currentBytes,
-                 sevenDayNoncurrentBytes:$noncurrentBytes,seedPuts:$seedPuts},
+                 noncurrentBytes:$noncurrentBytes,seedPuts:$seedPuts},
     monthly:{ec2:($ec2Hourly*$hours),ebs:($gp3GbMonth*$ebsGiB),
              publicIpv4:($publicIpv4Hourly*$hours),
              measuredS3Storage:((($currentBytes+$noncurrentBytes)/1000000000)*$s3GbMonth)},
