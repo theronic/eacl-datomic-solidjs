@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { setFetchImplementation } from "../src/api";
+import { Header } from "../src/components/Header";
 import { SubjectsPanel } from "../src/components/SubjectsPanel";
 import { AppStateProvider } from "../src/state";
 import { bootstrap, jsonResponse, success } from "./fixtures";
@@ -68,5 +69,56 @@ describe("subjects and permissions", () => {
     expect(screen.getByText("Active subject").parentElement).toHaveTextContent("user-1");
     expect(screen.getByText("Page 2")).toBeInTheDocument();
     expect(subjectRequests).toHaveLength(requestsBeforeSelection);
+  });
+
+  it("silently replaces a superseded subject page request", async () => {
+    setFetchImplementation(
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path === "/api/bootstrap") return jsonResponse(success(bootstrap));
+        if (path.startsWith("/api/subjects?")) {
+          const offset = Number(
+            new URL(path, "http://example.test").searchParams.get("offset"),
+          );
+          if (offset) {
+            return new Promise<Response>((_resolve, reject) => {
+              const signal = init?.signal as AbortSignal;
+              signal.addEventListener(
+                "abort",
+                () => reject(signal.reason),
+                { once: true },
+              );
+            });
+          }
+          return jsonResponse(success({
+            data: [{ type: "user", id: "user-1" }],
+            pageInfo: {
+              hasNextPage: true,
+              hasPreviousPage: false,
+              nextOffset: 20,
+              total: 53_055,
+            },
+          }));
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }) as typeof fetch,
+    );
+    render(() => (
+      <AppStateProvider>
+        <Header />
+        <SubjectsPanel />
+      </AppStateProvider>
+    ));
+
+    await screen.findByText("53,055 total");
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("combobox", { name: "Page size" }), {
+      target: { value: "50" },
+    });
+
+    expect(await screen.findByText("Page 1")).toBeInTheDocument();
+    expect(screen.queryByText(/Subjects page .* failed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not reach the server/i)).not.toBeInTheDocument();
   });
 });

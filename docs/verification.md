@@ -7,8 +7,8 @@ The current verification contract is:
 | Check | Expected result |
 | --- | --- |
 | ESLint | pass with zero warnings |
-| Client unit suite | 7 files, 18 tests |
-| Backend suite | 29 tests, 176 assertions |
+| Client unit suite | 8 files, 26 tests |
+| Backend suite | 38 tests, 220 assertions |
 | Local Datahike Playwright | 16 desktop/mobile cases |
 | Production build | hashed `/datahike/assets/*` embedded in the uberjar |
 | Reverse-proxy contract | redirects, prefix stripping, assets, API precedence, SPA refresh, mutation denials |
@@ -33,7 +33,7 @@ loading, pagination failure, and explicit recovery from an expired EACL cursor.
 
 ## Storage and reconnect
 
-`infra/scripts/test-minio.sh` runs the versioned MinIO compatibility suite. It
+`infra/scripts/test-minio.sh` runs the unversioned MinIO compatibility suite. It
 covers database creation, schema and fixtures, a paced seed, a real permission
 query, release, reconnect with the same UUID, object/version measurement, and
 cleanup. For a persistent developer instance, use
@@ -60,7 +60,7 @@ With an untracked `infra/deployment.env` loaded,
   credits.
 
 The production acceptance sequence additionally verifies the EC2 role
-credential chain, private/versioned S3 behavior, restart and reboot recovery,
+credential chain, private/unversioned S3 behavior, restart and reboot recovery,
 loopback-only Jetty/nREPL, SSH tunnelling, public TLS, public mutation denial,
 the 48-resource fixture, and clean-JVM read behavior at the final dataset size.
 The reusable procedure and rollback guards are in

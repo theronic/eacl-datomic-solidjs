@@ -6,8 +6,10 @@ describe("human-readable number formatting", () => {
     expect(formatInteger(53_055)).toBe("53,055");
   });
 
-  it("groups milliseconds while retaining one decimal place", () => {
+  it("groups milliseconds while retaining up to two decimal places", () => {
     expect(formatMilliseconds(14_379.3)).toBe("14,379.3");
+    expect(formatMilliseconds(123.45)).toBe("123.45");
+    expect(formatMilliseconds(1.23)).toBe("1.23");
     expect(formatMilliseconds(3)).toBe("3.0");
   });
 });

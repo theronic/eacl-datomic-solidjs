@@ -22,14 +22,18 @@ export function CacheTiming(props: {
 }): JSX.Element {
   return (
     <Show when={props.status || props.elapsedMs !== undefined}>
-      <span class="cache-timing">
-        <span class={`cache-badge cache-badge--${props.status ?? "miss"}`}>
-          {props.status ?? "miss"}
-        </span>
+      <span
+        class={`cache-timing cache-badge${
+          props.status ? ` cache-badge--${props.status}` : ""
+        }`}
+      >
         <Show when={props.elapsedMs !== undefined}>
           <span class="cache-timing__duration">
-            {" "}{formatMilliseconds(props.elapsedMs ?? 0)} ms
+            {formatMilliseconds(props.elapsedMs ?? 0)}ms
           </span>
+        </Show>
+        <Show when={props.status}>
+          {(status) => <span class="cache-timing__status">{status()}</span>}
         </Show>
       </span>
     </Show>

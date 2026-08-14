@@ -293,12 +293,38 @@ test.describe.serial("real Datahike-backed explorer", () => {
     await expect(page.locator(":focus")).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Source repositories" })).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Page size" })).toBeVisible();
-    if (testInfo.project.name === "mobile") {
-      expect(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-        ),
-      ).toBe(true);
+    await openSegment(page, /Servers/);
+    const serverGroup = page.locator(".group-card").filter({ hasText: "Servers" }).first();
+    await expect(serverGroup.locator(".cache-timing")).toHaveCount(2);
+    const layout = await serverGroup.evaluate((element) => {
+      const title = element.querySelector(".group-card__toggle")?.getBoundingClientRect();
+      const stats = element.querySelector(".group-card__stats")?.getBoundingClientRect();
+      const overlaps = Boolean(
+        title && stats &&
+        title.left < stats.right && title.right > stats.left &&
+        title.top < stats.bottom && title.bottom > stats.top,
+      );
+      return {
+        overflows: element.scrollWidth > element.clientWidth,
+        headerOverlaps: overlaps,
+      };
+    });
+    expect(layout).toEqual({ overflows: false, headerOverlaps: false });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+    if (testInfo.project.name === "desktop") {
+      const columnWidths = await page.locator(".panel-grid > *").evaluateAll((elements) =>
+        elements.slice(0, 3).map((element) => element.getBoundingClientRect().width),
+      );
+      expect(columnWidths).toHaveLength(3);
+      expect(columnWidths[1]).toBeGreaterThan(columnWidths[0]);
+      expect(columnWidths[1]).toBeGreaterThan(columnWidths[2]);
+    } else {
+      await expect(serverGroup.locator(".cache-timing").first())
+        .toContainText(/\d[\d,.]*ms(?:HIT|MISS|DISABLED)/i);
     }
   });
 

@@ -4,7 +4,7 @@ const integerFormatter = new Intl.NumberFormat("en-US", {
 
 const millisecondFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 1,
-  maximumFractionDigits: 1,
+  maximumFractionDigits: 2,
 });
 
 export function formatInteger(value: number): string {

@@ -10,10 +10,9 @@ import {
   type JSX,
 } from "solid-js";
 import { ApiError, LatestRequest } from "../api";
-import { formatInteger, formatMilliseconds } from "../format";
+import { formatInteger } from "../format";
 import { useAppState } from "../state";
 import type {
-  ApiMeta,
   ApiSuccess,
   ChildPath,
   EaclObject,
@@ -22,7 +21,6 @@ import type {
   ResourceCount,
 } from "../types";
 import {
-  ButtonSpinner,
   DisclosureButton,
   EmptyState,
   ErrorBlock,
@@ -36,26 +34,18 @@ import {
 } from "./Common";
 
 const resourceKey = (resource: EaclObject) => `${resource.type}:${resource.id}`;
-const initialCountLimit = 50_000;
+type ScopedSuccess<T> = {
+  scope: string;
+  envelope: ApiSuccess<T>;
+};
 
-function PaginationTiming(props: { meta?: ApiMeta }): JSX.Element {
-  return (
-    <Show when={props.meta?.elapsedMs !== undefined || props.meta?.cacheStatus}>
-      <span class="pagination-timing">
-        <span aria-hidden="true">(</span>
-        <Show when={props.meta?.elapsedMs !== undefined}>
-          <span>{formatMilliseconds(props.meta?.elapsedMs ?? 0)}ms</span>
-        </Show>
-        <Show when={props.meta?.cacheStatus}>
-          {(status) => (
-            <span class={`cache-badge cache-badge--${status()}`}>{status()}</span>
-          )}
-        </Show>
-        <span aria-hidden="true">)</span>
-      </span>
-    </Show>
-  );
-}
+const scopeKey = (...parts: unknown[]) => JSON.stringify(parts);
+
+// The current published EACL snapshot routes this acyclic schema through the
+// recursive engine. Production measurements place its default 100,000
+// advanced-datom ceiling between 30k and 40k super-user results. Keep the
+// automatic count below that safety limit until acyclic routing lands.
+const initialCountLimit = 30_000;
 
 function RelationshipGroup(props: {
   parent: EaclObject;
@@ -69,6 +59,28 @@ function RelationshipGroup(props: {
   const request = new LatestRequest();
   const [cursors, setCursors] = createSignal<string[]>([]);
   const cursor = () => cursors().at(-1);
+  const relationshipScope = () =>
+    scopeKey(
+      props.parent.type,
+      props.parent.id,
+      props.path.resourceType,
+      props.path.relation,
+      app.subjectId(),
+      app.permission(),
+      app.cacheEnabled(),
+      app.mutationRevision(),
+    );
+  const relationshipScopeFromInput = (input: readonly unknown[]) =>
+    scopeKey(
+      input[0],
+      input[1],
+      input[2],
+      input[3],
+      input[4],
+      input[5],
+      input[8],
+      input[9],
+    );
   const source = () =>
     expanded() && app.permission()
       ? ([
@@ -84,8 +96,9 @@ function RelationshipGroup(props: {
           app.mutationRevision(),
         ] as const)
       : false;
-  const [relationships, { refetch }] = createResource(source, (input) =>
-    request.run<RelationshipPage>("/api/eacl/read-relationships", {
+  const [relationships, { refetch }] = createResource(source, async (input) => ({
+    scope: relationshipScopeFromInput(input),
+    envelope: await request.run<RelationshipPage>("/api/eacl/read-relationships", {
       method: "POST",
       body: JSON.stringify({
         subject: { type: input[0], id: input[1] },
@@ -98,18 +111,21 @@ function RelationshipGroup(props: {
         cache: input[8],
       }),
     }),
-  );
+  } satisfies ScopedSuccess<RelationshipPage>));
   const [displayedRelationships, setDisplayedRelationships] =
     createSignal<ApiSuccess<RelationshipPage>>();
+  const [displayedRelationshipScope, setDisplayedRelationshipScope] =
+    createSignal("");
   const [displayedCursors, setDisplayedCursors] = createSignal<string[]>([]);
   const [pendingAction, setPendingAction] =
     createSignal<"first" | "previous" | "next">();
 
   createEffect(() => {
     if (relationships.loading || relationships.error) return;
-    const envelope = relationships();
-    if (!envelope) return;
-    setDisplayedRelationships(envelope);
+    const result = relationships();
+    if (!result) return;
+    setDisplayedRelationships(result.envelope);
+    setDisplayedRelationshipScope(result.scope);
     setDisplayedCursors([...cursors()]);
   });
   createEffect(() => {
@@ -130,7 +146,10 @@ function RelationshipGroup(props: {
     ),
   );
   onCleanup(() => request.abort());
-  const settledRelationships = displayedRelationships;
+  const settledRelationships = () =>
+    displayedRelationshipScope() === relationshipScope()
+      ? displayedRelationships()
+      : undefined;
   const navigationAction = () => {
     if (cursors().length > displayedCursors().length) return "next" as const;
     if (!cursors().length && displayedCursors().length) return "first" as const;
@@ -307,28 +326,19 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   const pageRequest = new LatestRequest();
   const countRequest = new LatestRequest();
   const [cursors, setCursors] = createSignal<string[]>([]);
-  const [countDemandVersion, setCountDemandVersion] = createSignal(0);
   const [settledPageScope, setSettledPageScope] = createSignal("");
-  let activeCountScope = "";
-  let activeCountLimit = initialCountLimit;
+  const [displayedPageScope, setDisplayedPageScope] = createSignal("");
   const cursor = () => cursors().at(-1);
   const countScope = () =>
-    JSON.stringify([
+    scopeKey(
       app.subjectId(),
       app.permission(),
       props.resourceType,
       app.cacheEnabled(),
       app.mutationRevision(),
-    ]);
-  const countLimit = () => {
-    countDemandVersion();
-    const scope = countScope();
-    if (scope !== activeCountScope) {
-      activeCountScope = scope;
-      activeCountLimit = initialCountLimit;
-    }
-    return activeCountLimit;
-  };
+    );
+  const resourceScopeFromInput = (input: readonly unknown[]) =>
+    scopeKey(...input.slice(0, 5));
   const base = () =>
     expanded() && app.permission()
       ? ([
@@ -346,11 +356,12 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
   const countSource = () => {
     const value = base();
     return value && settledPageScope() === countScope()
-      ? ([...value, countLimit()] as const)
+      ? ([...value, initialCountLimit] as const)
       : false;
   };
-  const [page, { refetch: refetchPage }] = createResource(pageSource, (input) =>
-    pageRequest.run<ObjectPage>("/api/eacl/lookup-resources", {
+  const [page, { refetch: refetchPage }] = createResource(pageSource, async (input) => ({
+    scope: resourceScopeFromInput(input),
+    envelope: await pageRequest.run<ObjectPage>("/api/eacl/lookup-resources", {
       method: "POST",
       body: JSON.stringify({
         subject: { type: "user", id: input[0] },
@@ -361,18 +372,22 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
         after: input[6] || undefined,
       }),
     }),
-  );
-  const [count, { refetch: refetchCount }] = createResource(countSource, (input) =>
-    countRequest.run<ResourceCount>("/api/eacl/count-resources", {
-      method: "POST",
-      body: JSON.stringify({
-        subject: { type: "user", id: input[0] },
-        permission: input[1],
-        resourceType: input[2],
-        cache: input[3],
-        countLimit: input[5],
+  } satisfies ScopedSuccess<ObjectPage>));
+  const [count, { refetch: refetchCount }] = createResource(
+    countSource,
+    async (input) => ({
+      scope: resourceScopeFromInput(input),
+      envelope: await countRequest.run<ResourceCount>("/api/eacl/count-resources", {
+        method: "POST",
+        body: JSON.stringify({
+          subject: { type: "user", id: input[0] },
+          permission: input[1],
+          resourceType: input[2],
+          cache: input[3],
+          countLimit: input[5],
+        }),
       }),
-    }),
+    } satisfies ScopedSuccess<ResourceCount>),
   );
   const [displayedPage, setDisplayedPage] = createSignal<ApiSuccess<ObjectPage>>();
   const [displayedCount, setDisplayedCount] =
@@ -385,36 +400,25 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
 
   createEffect(() => {
     if (page.loading || page.error) return;
-    const envelope = page();
-    if (!envelope) return;
-    setDisplayedPage(envelope);
+    const result = page();
+    if (!result) return;
+    setDisplayedPage(result.envelope);
+    setDisplayedPageScope(result.scope);
     setDisplayedCursors([...cursors()]);
     setDisplayedPageSize(app.pageSize());
-    setSettledPageScope(countScope());
+    setSettledPageScope(result.scope);
   });
   createEffect(() => {
     if (!page.loading) setPendingPageAction(undefined);
   });
   createEffect(() => {
     if (count.loading || count.error) return;
-    const envelope = count();
-    if (envelope) {
-      setDisplayedCount(envelope);
-      setDisplayedCountScope(countScope());
+    const result = count();
+    if (result) {
+      setDisplayedCount(result.envelope);
+      setDisplayedCountScope(result.scope);
     }
   });
-
-  const doubleCountLimit = () => {
-    const result = displayedCount()?.data;
-    if (!result?.truncated || count.loading) return;
-    const currentLimit = Math.max(countLimit(), result.limit);
-    const nextLimit = Math.min(Number.MAX_SAFE_INTEGER, currentLimit * 2);
-    if (nextLimit > currentLimit) {
-      activeCountScope = countScope();
-      activeCountLimit = nextLimit;
-      setCountDemandVersion((version) => version + 1);
-    }
-  };
 
   createEffect(
     on(
@@ -429,19 +433,13 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
       { defer: true },
     ),
   );
-  createEffect(
-    on(
-      countScope,
-      () => countRequest.abort(),
-      { defer: true },
-    ),
-  );
   onCleanup(() => {
     pageRequest.abort();
     countRequest.abort();
   });
 
-  const settledPage = displayedPage;
+  const settledPage = () =>
+    displayedPageScope() === countScope() ? displayedPage() : undefined;
   const settledCount = () =>
     displayedCountScope() === countScope() ? displayedCount() : undefined;
   const pageNavigationAction = () => {
@@ -509,7 +507,7 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                 <span class="group-card__range">
                   {formatInteger(rangeStart())}–{formatInteger(rangeEnd())}
                 </span>
-                <PaginationTiming meta={settledPage()?.meta} />
+                <MetaTiming meta={settledPage()?.meta} />
                 <Show when={page.loading && !pendingPageAction()}>
                   <InlineLoading label={`Refreshing ${props.resourceType} resources`} />
                 </Show>
@@ -542,21 +540,14 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
                         </span>
                       }
                     >
-                      <button
-                        type="button"
-                        class="group-card__count group-card__count-button"
+                      <span
+                        class="group-card__count"
                         aria-label={`Count beyond ${formatInteger(envelope().data.count)} ${props.resourceType} resources`}
-                        disabled={count.loading}
-                        aria-busy={count.loading}
-                        onClick={doubleCountLimit}
                       >
-                        <Show when={count.loading}>
-                          <ButtonSpinner />
-                        </Show>
                         {formatInteger(envelope().data.count)}+
-                      </button>
+                      </span>
                     </Show>
-                    <PaginationTiming meta={envelope().meta} />
+                    <MetaTiming meta={envelope().meta} />
                     <Show when={count.loading && !envelope().data.truncated}>
                       <InlineLoading label={`Counting ${props.resourceType} resources`} />
                     </Show>
