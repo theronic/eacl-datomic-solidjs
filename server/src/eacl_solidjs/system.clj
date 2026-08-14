@@ -19,8 +19,9 @@
 
 (defn- client-options
   [{:keys [security-key]}]
-  (cond-> {:coherence-authority :managed
-           :cache {:remember-answers true}}
+  ;; :coherence-authority was a pre-release experimental option; cache
+  ;; coherence is managed by the release client.
+  (cond-> {:cache {:remember-answers true}}
     security-key (assoc :security-key security-key)))
 
 (defn build-system
