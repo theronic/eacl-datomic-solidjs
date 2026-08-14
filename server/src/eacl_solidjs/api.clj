@@ -199,11 +199,12 @@
                 after (assoc :after after))]
     (run-eacl
      system request :read-relationships
-     ;; Permission checks on a nested page are a sweep of distinct resources.
-     ;; Bypass completed-answer caching so recursive point checks use EACL's
-     ;; target-anchored reverse evaluator instead of materializing the complete
-     ;; forward denotation while holding the client's schema read lock.
-     (if authorization-subject false cache?)
+     ;; The stable engine's point checks are always target-anchored with
+     ;; early termination, so the old bypass (which protected against the
+     ;; retired engine materializing complete forward denotations during a
+     ;; nested sweep) no longer applies; authorization-filtered pages cache
+     ;; like every other read.
+     cache?
      #(let [result (eacl/read-relationships (:acl system) query)]
         (if authorization-subject
           (let [decisions

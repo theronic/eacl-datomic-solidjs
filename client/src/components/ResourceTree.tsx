@@ -378,7 +378,15 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
         <Show when={expanded()}>
           <div class="group-card__stats">
             <span class="group-card__page-stats">
-              <Show when={page()} fallback={<span class="section-meta">—</span>}>
+              {/* createResource keeps serving the previous value while a
+                  refetch runs; guarding on loading/error stops a subject
+                  switch from showing the prior subject's numbers. */}
+              <Show
+                when={!page.loading && !page.error && page()}
+                fallback={
+                  <span class="section-meta">{page.loading ? "…" : "—"}</span>
+                }
+              >
                 <span class="group-card__range">
                   {rangeStart()}–{rangeEnd()}
                 </span>
@@ -387,7 +395,12 @@ function ResourceTypeGroup(props: { resourceType: string }): JSX.Element {
             </span>
             <span class="group-card__stats-separator">of</span>
             <span class="group-card__count-stats">
-              <Show when={count()} fallback={<span class="section-meta">—</span>}>
+              <Show
+                when={!count.loading && !count.error && count()}
+                fallback={
+                  <span class="section-meta">{count.loading ? "…" : "—"}</span>
+                }
+              >
                 {(envelope: () => ApiSuccess<ResourceCount>) => (
                   <>
                     <Show
