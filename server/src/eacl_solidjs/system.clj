@@ -21,7 +21,13 @@
   [{:keys [security-key]}]
   ;; :coherence-authority was a pre-release experimental option; cache
   ;; coherence is managed by the release client.
-  (cond-> {:cache {:remember-answers true}}
+  ;; The demo's million-server platform subject legitimately exceeds the
+  ;; default per-request work ceilings, so this deployment opts into
+  ;; larger ones explicitly.
+  (cond-> {:cache {:remember-answers true}
+           :recursive-traversal-limits {:max-derived-grants 5000000
+                                        :max-advanced-datoms 5000000
+                                        :max-queued-work 1000000}}
     security-key (assoc :security-key security-key)))
 
 (defn build-system
