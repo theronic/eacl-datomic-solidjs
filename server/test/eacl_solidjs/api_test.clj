@@ -1,6 +1,23 @@
 (ns eacl-solidjs.api-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
+            [eacl.core :as eacl]
             [eacl-solidjs.test-support :as support]))
+
+(deftest eacl-requests-honor-a-cancelled-request-token
+  (support/with-test-system [system]
+    (let [token (eacl/cancellation-token)
+          _ (eacl/cancel! token)
+          handler (fn [request]
+                    ((:handler system)
+                     (assoc request :eacl/cancellation-token token)))
+          response
+          (support/request handler :post "/api/eacl/lookup-resources"
+                           (assoc support/lookup-resources-body :cache false))]
+      (is (= 499 (:status response)))
+      (is (= "request-cancelled"
+             (get-in (support/response-body response) [:error :code])))
+      (is (= (get-in system [:config :max-eacl-concurrency])
+             (.availablePermits (:eacl-permits system)))))))
 
 (deftest common-routes-and-methods
   (support/with-test-system [system]
@@ -46,7 +63,9 @@
       (doseq [body [(dissoc base-body :countLimit)
                     (assoc base-body :countLimit 0)
                     (assoc base-body :countLimit -1)
-                    (assoc base-body :countLimit 1.5)]]
+                    (assoc base-body :countLimit 1.5)
+                    (assoc base-body :countLimit
+                           (inc (get-in system [:config :max-count-limit])))]]
         (let [response (support/request handler :post
                                         "/api/eacl/count-resources"
                                         body)]
@@ -54,3 +73,18 @@
           (is (= "invalid-count-limit"
                  (get-in (support/response-body response) [:error :code])))))
       (is (= metrics-before @(:!metrics system))))))
+
+(deftest authorization-saturation-fails-fast
+  (support/with-test-system [system]
+    (let [permits (:eacl-permits system)
+          acquired (.drainPermits permits)]
+      (try
+        (let [response
+              (support/request (:handler system) :post
+                               "/api/eacl/lookup-resources"
+                               support/lookup-resources-body)]
+          (is (= 503 (:status response)))
+          (is (= "server-busy"
+                 (get-in (support/response-body response) [:error :code]))))
+        (finally
+          (.release permits acquired))))))

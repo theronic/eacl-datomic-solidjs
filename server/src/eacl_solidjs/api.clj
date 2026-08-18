@@ -15,7 +15,7 @@
             [ring.util.response :as response])
   (:import [java.nio.charset StandardCharsets]
            [java.time Instant]
-           [java.util.concurrent Callable]))
+           [java.util.concurrent Callable Semaphore]))
 
 (defn- object->map
   [object]
@@ -37,24 +37,38 @@
 
 (defn- run-eacl
   [system request operation cache? execute transform]
-  (let [started (System/nanoTime)]
+  (let [started (System/nanoTime)
+        permits ^Semaphore (:eacl-permits system)
+        cancellation-token
+        (or (:eacl/cancellation-token request)
+            (eacl/cancellation-token))]
+    (when-not (.tryAcquire permits)
+      (contracts/api-error 503 "server-busy"
+                           "The authorization worker pool is busy."))
     (try
-      (let [result (execute)
-            elapsed (contracts/elapsed-ms started)
-            api-response
-            (contracts/success
-             system request (transform result)
-             {:elapsed-ms elapsed
-              :cache-status (contracts/cache-status result cache?)})
-            bytes (alength (.getBytes ^String (:body api-response)
-                                     StandardCharsets/UTF_8))]
-        (runtime/record-operation!
-         system operation elapsed true bytes)
-        api-response)
-      (catch Exception ex
-        (runtime/record-operation!
-         system operation (contracts/elapsed-ms started) false 0)
-        (throw ex)))))
+      (try
+        (let [result (execute cancellation-token)
+              elapsed (contracts/elapsed-ms started)
+              api-response
+              (contracts/success
+               system request (transform result)
+               {:elapsed-ms elapsed
+                :cache-status (contracts/cache-status result cache?)})
+              bytes (alength (.getBytes ^String (:body api-response)
+                                       StandardCharsets/UTF_8))]
+          (runtime/record-operation!
+           system operation elapsed true bytes)
+          api-response)
+        (catch Exception ex
+          (runtime/record-operation!
+           system operation (contracts/elapsed-ms started) false 0)
+          (if (eacl/cancelled? cancellation-token)
+            (throw (ex-info "Request cancelled."
+                            {:type :eacl.execution/cancelled}
+                            ex))
+            (throw ex))))
+      (finally
+        (.release permits)))))
 
 (defn- eacl-page-query
   [system body direction]
@@ -94,7 +108,10 @@
       :schema (data/schema-info db)
       :quick-subjects data/quick-subjects
       :page-size-options data/page-size-options
-      :default-page-size data/default-page-size})))
+      :default-page-size data/default-page-size
+      :capabilities {:schema-write? true
+                     :seed-write? true
+                     :cache-evict? true}})))
 
 (defn- handle-subjects
   [system request]
@@ -116,7 +133,8 @@
         {:keys [query cache?]} (eacl-page-query system body :first)]
     (run-eacl
      system request :lookup-resources cache?
-     #(eacl/lookup-resources (:acl system) query)
+     #(eacl/lookup-resources
+       (:acl system) (assoc query :cancellation-token %))
      (fn [result]
        {:items (mapv object->map (:data result))
         :page-info (page-info result)}))))
@@ -130,7 +148,7 @@
         permission
         (contracts/schema-permission system resource-type (:permission body))
         cache? (contracts/cache-enabled? body)
-        count-limit (contracts/count-limit body)
+        count-limit (contracts/count-limit system body)
         query {:subject subject
                :permission permission
                :resource/type resource-type
@@ -138,7 +156,8 @@
                :cache? cache?}]
     (run-eacl
      system request :count-resources cache?
-     #(eacl/count-resources (:acl system) query)
+     #(eacl/count-resources
+       (:acl system) (assoc query :cancellation-token %))
      #(select-keys % [:count :limit :truncated?]))))
 
 (defn- handle-lookup-subjects
@@ -160,7 +179,8 @@
                 after (assoc :after after))]
     (run-eacl
      system request :lookup-subjects cache?
-     #(eacl/lookup-subjects (:acl system) query)
+     #(eacl/lookup-subjects
+       (:acl system) (assoc query :cancellation-token %))
      (fn [result]
        {:items (mapv object->map (:data result))
         :page-info (page-info result)}))))
@@ -205,7 +225,8 @@
      ;; nested sweep) no longer applies; authorization-filtered pages cache
      ;; like every other read.
      cache?
-     #(let [result (eacl/read-relationships (:acl system) query)]
+     #(let [query (assoc query :cancellation-token %)
+            result (eacl/read-relationships (:acl system) query)]
         (if authorization-subject
           (let [decisions
                 (mapv
@@ -215,7 +236,8 @@
                     {:subject authorization-subject
                      :permission authorization-permission
                      :resource (:resource relationship)
-                     :cache? false}))
+                     :cache? false
+                     :cancellation-token %}))
                  (:data result))
                 allowed
                 (->> (map vector (:data result) decisions)
@@ -244,7 +266,8 @@
                :cache? cache?}]
     (run-eacl
      system request :check-permission cache?
-     #(eacl/check-permission (:acl system) query)
+     #(eacl/check-permission
+       (:acl system) (assoc query :cancellation-token %))
      #(select-keys % [:allowed?]))))
 
 (defn- handle-schema-read
@@ -405,11 +428,13 @@
     (try
       (handler request)
       (catch Throwable throwable
-        (when (= 500 (or (:http/status (ex-data throwable)) 500))
+        (let [response
+              (contracts/exception->response system request throwable)]
+          (when (= 500 (:status response))
           (log/error throwable "Unhandled API failure"
                      {:request-id (:request-id request)
-                      :uri (:uri request)}))
-        (contracts/exception->response system request throwable)))))
+                       :uri (:uri request)}))
+          response)))))
 
 (defn app
   [system]

@@ -148,12 +148,22 @@ EACL Datomic client (managed coherence)
 Every authorization query is server-owned. The client never downloads the
 complete dataset, never receives Datomic entities, and never bundles EACL,
 DataScript, Rum, or Electric. Resource pages and counts refetch independently.
-Each group starts with `countLimit: 50000`, renders a truncated result as
-`50k+`, and doubles only that limit when the user clicks the count; the final
-non-truncated response is exact. EACL objects cross the HTTP boundary only as
+Each group requests at most `countLimit: 30000` and renders a truncated result
+as `30,000+`; exact million-row counts are intentionally outside the interactive
+request budget. EACL objects cross the HTTP boundary only as
 `{ "type": ..., "id": ... }`; readable names are derived locally by SolidJS.
 Relationship children load only when expanded. Schema graph D3 code is a lazy
 chunk. Hashed JS/CSS assets are pre-gzipped and served immutable.
+
+After a resource is selected, the right-hand Detail panel starts with **Can
+active subject?**. It sends one authoritative `/api/eacl/check-permission`
+request for every permission defined on that resource type, so the current
+`view` and `admin` rows are schema-derived rather than hard-coded. Each row
+shows Allowed or Denied beside that point check's server-reported elapsed time
+and cache provenance (`hit`, `miss`, or `disabled`). These decisions are not
+inferred from the bounded permission-holder pages below them. A row retains its
+last successful result while a semantic replacement is visibly refreshing,
+and failures and retries remain isolated to that permission.
 
 Seeding is asynchronous and does not replace or disable the explorer. The POST
 handler uses compare-and-set to reserve the single seed slot before queueing the
@@ -162,6 +172,17 @@ worker, returns `202`, and rejects concurrent submissions with `409`. Solid poll
 Datomic basis invalidates visible EACL resources so authorization remains
 queryable and visibly reactive during the load. The worker releases the
 reservation from `finally`, whether it succeeds or fails.
+
+The explorer retains its last successful page while a replacement request is
+running, but every retained resource, count, and relationship page is scoped to
+the exact subject, permission, cache mode, page size, and mutation revision
+that produced it. A subject or permission switch therefore cannot display the
+previous scope's data. Browser requests have a 35-second end-to-end deadline;
+the server gives EACL 30 seconds and admits at most four concurrent traversals.
+Jetty propagates timeout and upstream socket-close events into the same EACL
+cancellation token, interrupting a blocking read as a bounded backstop. Its
+worker pool and admission queue are bounded independently, so abandoned work
+cannot silently accumulate behind those four traversal permits.
 
 The cache display has a stricter rule than the other panels: opening it,
 running queries, toggling caching, evicting, writing schema, or seeding does
@@ -281,13 +302,27 @@ curl -s http://127.0.0.1:8088/api/eacl/lookup-resources \
   }'
 ```
 
+Example authoritative point decision (the Detail panel uses this contract):
+
+```bash
+curl -s http://127.0.0.1:8088/api/eacl/check-permission \
+  -H 'content-type: application/json' \
+  -d '{
+    "subject":{"type":"user","id":"user-1"},
+    "resource":{"type":"account","id":"account-0"},
+    "permission":"admin",
+    "cache":true
+  }'
+```
+
 Supported page sizes are `10`, `20`, `50`, `100`, `250`, `500`, and `1000`;
 the default is `20`. Invalid input is `400`, stale/mismatched opaque cursors
-are `409`, invalid Spice source is `422`, and unexpected details are hidden
-behind a generic `500`.
+are `409`, traversal-limit failures are `422`, saturated authorization capacity
+is `503`, EACL deadlines are `504`, invalid Spice source is `422`, and
+unexpected details are hidden behind a generic `500`.
 
-Count requests require a positive `countLimit`. The Explorer sends `50000`
-initially and doubles it only when the user clicks a truncated `N+` total:
+Count requests require a positive `countLimit` no larger than the configured
+one-million ceiling. The Explorer sends `30000`:
 
 ```bash
 curl -s http://127.0.0.1:8088/api/eacl/count-resources \
@@ -296,7 +331,7 @@ curl -s http://127.0.0.1:8088/api/eacl/count-resources \
     "subject":{"type":"user","id":"super-user"},
     "resourceType":"server",
     "permission":"view",
-    "countLimit":50000,
+    "countLimit":30000,
     "cache":true
   }'
 ```
@@ -314,6 +349,16 @@ secret-free reference and is not loaded automatically.
 | `EACL_SOLIDJS_REQUEST_TIMEOUT_MS` | `30000` | HTTP request budget |
 | `EACL_SOLIDJS_MAX_BODY_BYTES` | `1048576` | JSON and schema body limit |
 | `EACL_SOLIDJS_MAX_SEED_SERVERS` | `100000` | Per-request seed limit |
+| `EACL_SOLIDJS_MAX_COUNT_LIMIT` | `1000000` | Maximum accepted demand-bounded count |
+| `EACL_SOLIDJS_MAX_EACL_CONCURRENCY` | `4` | Concurrent EACL traversals before fast `503` rejection |
+| `EACL_SOLIDJS_CACHE_MAX_ENTRIES` | `512` | Cursor/continuation and cache-admission entry bound |
+| `EACL_SOLIDJS_CACHE_PROJECTION_MAX_WEIGHT` | `4194304` | Projection cache weight budget |
+| `EACL_SOLIDJS_CACHE_DENOTATION_MAX_WEIGHT` | `4194304` | Denotation cache weight budget |
+| `EACL_SOLIDJS_CACHE_ANSWER_MAX_WEIGHT` | `16777216` | Completed-answer cache weight budget |
+| `EACL_SOLIDJS_CACHE_MANAGED_PROOF_MAX_ATOMS` | `256` | Managed proof dependency bound |
+| `EACL_SOLIDJS_JETTY_MIN_THREADS` | `2` | Minimum Jetty worker threads |
+| `EACL_SOLIDJS_JETTY_MAX_THREADS` | `16` | Maximum Jetty worker threads |
+| `EACL_SOLIDJS_JETTY_MAX_QUEUED_REQUESTS` | `64` | Bounded Jetty admission queue |
 | `EACL_SOLIDJS_SECURITY_KEY` | none | Required for the durable default; keep stable and secret |
 
 The composite revision is `d<datomic-basis>.c<cache-generation>`. It is an
@@ -344,14 +389,40 @@ clj-nrepl-eval -p PORT --timeout 900000 \
 ```
 
 It creates an isolated memory database, appends 10,000 servers through EACL's
-managed mutation path, warms the default 20-item page, then records request
-count, response bytes, and p50/p95/max across 50 Ring HTTP-boundary samples.
-The documented warmed default-page target is p95 ≤ 250 ms.
+managed mutation path, then warms and records 50 samples independently for
+`check-permission`, `lookup-resources`, and `lookup-subjects`. Every operation
+reports request count, total/average response bytes, cache-provenance counts,
+and p50/p95/max for two different clocks:
 
-Reference run on 2026-08-08 (arm64, OpenJDK 22.0.1): 10,048 total servers,
-4.63 s seed time, 50 requests, 4,216.84 average response bytes, 4.11 ms p50,
-6.54 ms p95, and 52.01 ms max. The target passed. These numbers are a local
-signal, not a hardware-stable CI assertion.
+- `server-latency-ms` is the API's `meta.elapsedMs`, which surrounds the
+  server-side EACL adapter call and its local admission/token setup.
+- `ring-boundary-latency-ms` surrounds direct invocation of the in-process Ring
+  handler. It adds routing, validation, envelope creation, and JSON encoding,
+  but it is **not** browser-observed HTTP latency and excludes sockets, proxying,
+  network transfer, JSON parsing in the browser, scheduling, and rendering.
+
+The warmed `lookup-resources` Ring-boundary p95 target remains ≤ 250 ms; no
+absolute target is assigned to the other operations. Cache status is retained
+for every sample so a warmed hit distribution cannot be mistaken for miss or
+cache-disabled cost.
+
+Reference run on 2026-08-18 (isolated memory Datomic, 10,048 total servers,
+4.99 s seed, 3 warmups and 50 recorded cache hits per operation):
+
+| Operation | Average bytes | Server p50 / p95 / max | Ring p50 / p95 / max |
+| --- | ---: | ---: | ---: |
+| `check-permission` | 148.88 | 0.40 / 0.55 / 0.61 ms | 1.03 / 1.41 / 1.56 ms |
+| `lookup-resources` | 4,219.68 | 0.96 / 1.41 / 2.10 ms | 1.49 / 2.30 / 2.89 ms |
+| `lookup-subjects` | 3,975.48 | 0.71 / 1.00 / 1.20 ms | 1.19 / 1.57 / 1.69 ms |
+
+The `lookup-resources` target passed. This benchmark is a repeatable local
+comparison, not a claim about the one-million-entity durable demo: it does not
+reproduce that database's size, peer/cache history, browser/network path,
+concurrent load, or worst-case recursive relationship depth. Consumers who
+need those costs must run a separate deployment-level workload with stated
+fixture topology and independent hit, miss, disabled, sequential, and
+concurrent distributions; those hardware-sensitive timings do not belong in
+the functional suite.
 
 ## Troubleshooting
 

@@ -84,3 +84,16 @@
    :permission "view"
    :pageSize 10
    :cache true})
+
+(def lookup-subjects-body
+  {:resource server-0
+   :permission "view"
+   :subjectType "user"
+   :pageSize 10
+   :cache true})
+
+(def check-permission-body
+  {:subject user-1
+   :resource account-0
+   :permission "admin"
+   :cache true})
