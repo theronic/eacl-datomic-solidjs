@@ -9,40 +9,63 @@ import {
   Suspense,
   type JSX,
 } from "solid-js";
-import { apiRequest, LatestRequest } from "../api";
+import { LatestRequest } from "../api";
+import { formatInteger } from "../format";
 import { useAppState } from "../state";
 import type { SchemaInfo } from "../types";
-import { DisclosureButton, ErrorBlock, LoadingBlock } from "./Common";
+import {
+  ButtonSpinner,
+  DisclosureButton,
+  ErrorBlock,
+  InlineError,
+  InlineLoading,
+  LoadingBlock,
+} from "./Common";
 
 const SchemaGraph = lazy(() => import("./SchemaGraph"));
 
 export function SchemaPanel(): JSX.Element {
   const app = useAppState();
   const request = new LatestRequest();
+  const writeRequest = new LatestRequest();
   const [schema, { mutate, refetch }] = createResource(
     () => true,
     () => request.run<SchemaInfo>("/api/schema"),
   );
+  const [displayedSchema, setDisplayedSchema] = createSignal<
+    ReturnType<typeof schema>
+  >();
   const [draft, setDraft] = createSignal("");
   const [committed, setCommitted] = createSignal("");
   const [writeError, setWriteError] = createSignal<unknown>();
   const [writing, setWriting] = createSignal(false);
   const expansionKey = "segment:schema";
   const expanded = () => app.isExpanded(expansionKey);
+  const writable = () => Boolean(app.bootstrapData()?.data.capabilities.schemaWrite);
+  const settledSchema = displayedSchema;
 
   createEffect(() => {
-    const source = schema()?.data.source;
+    if (schema.loading || schema.error) return;
+    const envelope = schema();
+    if (envelope) setDisplayedSchema(envelope);
+  });
+
+  createEffect(() => {
+    const source = settledSchema()?.data.source;
     if (source === undefined) return;
     if (!committed() || draft() === committed()) setDraft(source);
     setCommitted(source);
   });
-  onCleanup(() => request.abort());
+  onCleanup(() => {
+    request.abort();
+    writeRequest.abort();
+  });
 
   const writeSchema = async () => {
     setWriting(true);
     setWriteError(undefined);
     try {
-      const result = await apiRequest<SchemaInfo>("/api/schema", {
+      const result = await writeRequest.run<SchemaInfo>("/api/schema", {
         method: "PUT",
         body: JSON.stringify({ source: draft() }),
       });
@@ -68,14 +91,26 @@ export function SchemaPanel(): JSX.Element {
             onClick={() => app.toggleExpanded(expansionKey)}
           >
             <span class="group-card__title">
-              Schema ({schema()?.data.resourceCount ?? 0} resources, {" "}
-              {schema()?.data.relationCount ?? 0} relations, {" "}
-              {schema()?.data.permissionCount ?? 0} permissions)
+              Schema
+              <Show when={settledSchema()}>
+                {(envelope) => (
+                  <> ({formatInteger(envelope().data.resourceCount)} resources, {" "}
+                    {formatInteger(envelope().data.relationCount)} relations, {" "}
+                    {formatInteger(envelope().data.permissionCount)} permissions)
+                  </>
+                )}
+              </Show>
             </span>
           </DisclosureButton>
-          <Show when={writing() || draft() !== committed()}>
+          <Show when={schema.loading}>
+            <InlineLoading label="Loading schema" />
+          </Show>
+          <Show when={schema.error}>
+            <InlineError label="Schema unavailable" />
+          </Show>
+          <Show when={!schema.loading && !schema.error && !writing() && draft() !== committed()}>
             <span class="section-meta" role="status">
-              {writing() ? "Writing schema…" : "Unsaved changes"}
+              Unsaved changes
             </span>
           </Show>
         </div>
@@ -85,51 +120,67 @@ export function SchemaPanel(): JSX.Element {
               <div class="section-header">
                 <div>
                   <p class="panel-label">Spice Schema</p>
-                  <p class="section-meta">Edit the schema and click Write Schema</p>
+                  <p class="section-meta">
+                    {writable() ? "Edit the schema and click Write Schema" : "Read-only public demo"}
+                  </p>
                 </div>
               </div>
-              <Show when={schema.loading && !schema()}>
+              <Show when={schema.loading && !settledSchema()}>
                 <LoadingBlock label="schema" />
               </Show>
               <Show when={schema.error}>
-                <ErrorBlock error={schema.error} retry={() => void refetch()} />
+                <ErrorBlock
+                  label="Schema request failed"
+                  error={schema.error}
+                  retry={() => void refetch()}
+                />
               </Show>
-              <div class="schema-preset-tabs" role="tablist" aria-label="Schema presets">
-                <For each={schema()?.data.presets ?? []}>
-                  {(preset) => (
+              <Show when={settledSchema()}>
+                <div class="schema-preset-tabs" role="tablist" aria-label="Schema presets">
+                  <For each={settledSchema()?.data.presets ?? []}>
+                    {(preset) => (
+                      <button
+                        type="button"
+                        role="tab"
+                        class={`schema-preset-tab ${draft() === preset.schema ? "schema-preset-tab--active" : ""}`}
+                        aria-selected={draft() === preset.schema}
+                        disabled={!writable() || writing()}
+                        onClick={() => setDraft(preset.schema)}
+                      >
+                        {preset.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <textarea
+                  id="schema-editor"
+                  class="schema-editor"
+                  aria-label="Spice Schema"
+                  spellcheck={false}
+                  readOnly={!writable() || writing()}
+                  value={draft()}
+                  onInput={(event) => setDraft(event.currentTarget.value)}
+                />
+                <div class="schema-panel__actions">
+                  <Show when={writeError()}>
+                    {(error) => <ErrorBlock label="Schema write failed" error={error()} />}
+                  </Show>
+                  <Show when={writable()}>
                     <button
                       type="button"
-                      role="tab"
-                      class={`schema-preset-tab ${draft() === preset.schema ? "schema-preset-tab--active" : ""}`}
-                      aria-selected={draft() === preset.schema}
-                      onClick={() => setDraft(preset.schema)}
+                      class="pagination-button"
+                      disabled={writing() || !draft() || draft() === committed()}
+                      aria-busy={writing()}
+                      onClick={() => void writeSchema()}
                     >
-                      {preset.label}
+                      <Show when={writing()}>
+                        <ButtonSpinner />
+                      </Show>
+                      Write Schema
                     </button>
-                  )}
-                </For>
-              </div>
-              <textarea
-                id="schema-editor"
-                class="schema-editor"
-                aria-label="Spice Schema"
-                spellcheck={false}
-                value={draft()}
-                onInput={(event) => setDraft(event.currentTarget.value)}
-              />
-              <div class="schema-panel__actions">
-                <Show when={writeError()}>
-                  {(error) => <ErrorBlock error={error()} />}
-                </Show>
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={writing() || !draft() || draft() === committed()}
-                  onClick={() => void writeSchema()}
-                >
-                  {writing() ? "Writing…" : "Write Schema"}
-                </button>
-              </div>
+                  </Show>
+                </div>
+              </Show>
             </section>
             <section class="schema-panel__pane">
               <div class="section-header">
@@ -140,7 +191,7 @@ export function SchemaPanel(): JSX.Element {
               </div>
               <div class="graph-canvas">
                 <Suspense fallback={<LoadingBlock label="schema graph" />}>
-                  <Show when={schema()}>
+                  <Show when={settledSchema()}>
                     {(envelope) => (
                       <SchemaGraph
                         nodes={envelope().data.nodes}

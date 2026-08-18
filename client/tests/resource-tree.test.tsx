@@ -4,8 +4,9 @@ import { CachePanel } from "../src/components/CachePanel";
 import { Header } from "../src/components/Header";
 import { DetailPanel } from "../src/components/DetailPanel";
 import { ResourceTreePanel } from "../src/components/ResourceTree";
+import { SubjectsPanel } from "../src/components/SubjectsPanel";
 import { AppStateProvider } from "../src/state";
-import { bootstrap, jsonResponse, success } from "./fixtures";
+import { bootstrap, failure, jsonResponse, success } from "./fixtures";
 
 describe("reactive resource paging", () => {
   it("resets page cursors on page-size changes without coupling the exact count", async () => {
@@ -33,7 +34,7 @@ describe("reactive resource paging", () => {
             },
           }),
           meta: {
-            revision: "d100.c0",
+            revision: "h100.c0",
             requestId: "page-request",
             elapsedMs: body.after ? 4.7 : 3.2,
             cacheStatus: "hit" as const,
@@ -45,15 +46,15 @@ describe("reactive resource paging", () => {
         return jsonResponse({
           ...success({ count: 48, limit: 50_000, truncated: false }),
           meta: {
-            revision: "d100.c0",
+            revision: "h100.c0",
             requestId: "count-request",
-            elapsedMs: 60.9,
+            elapsedMs: 14_379.3,
             cacheStatus: "miss" as const,
           },
         });
       }
       if (path === "/api/cache/evict") {
-        return jsonResponse(success({ status: "evicted" }, "d100.c1"));
+        return jsonResponse(success({ status: "evicted" }, "h100.c1"));
       }
       if (path === "/api/eacl/lookup-subjects") {
         return jsonResponse(success({
@@ -81,10 +82,16 @@ describe("reactive resource paging", () => {
     expect(screen.getByText("Server Page 1").parentElement)
       .toHaveTextContent("Server Page 1 server-page-1");
     expect(await within(group).findByText("1–1")).toBeInTheDocument();
-    expect(within(group).getByText("48")).toBeInTheDocument();
+    expect(await within(group).findByText("48")).toBeInTheDocument();
     expect(
       requestBodies.find(({ path }) => path.endsWith("count-resources"))?.body,
-    ).toMatchObject({ countLimit: 50_000 });
+    ).toMatchObject({
+      subject: { type: "user", id: "user-1" },
+      countLimit: 30_000,
+    });
+    expect(
+      requestBodies.find(({ path }) => path.endsWith("lookup-resources"))?.body,
+    ).toMatchObject({ subject: { type: "user", id: "user-1" } });
 
     const lookupsBeforeEviction = requestBodies.filter(({ path }) =>
       path.endsWith("lookup-resources"),
@@ -110,10 +117,15 @@ describe("reactive resource paging", () => {
       requestBodies.filter(({ path }) => path.endsWith("count-resources")),
     ).toHaveLength(countsBeforeEviction + 1);
 
+    await within(group).findByText("Server Page 1");
     fireEvent.click(screen.getByRole("button", { name: /Server Page 1.*server-page-1/i }));
     expect(await screen.findByRole("button", { name: /User 1/ })).toBeInTheDocument();
     const countStats = group.querySelector(".group-card__count-stats");
-    expect(countStats).toHaveTextContent("48(60.9msmiss)");
+    await waitFor(() => {
+      expect(countStats).toHaveTextContent("4814,379.3msmiss");
+    });
+    expect(countStats).not.toHaveTextContent(/[()]/);
+    expect(countStats?.querySelectorAll(".cache-badge")).toHaveLength(1);
     fireEvent.click(
       screen
         .getAllByRole("button", { name: "Next" })
@@ -126,13 +138,25 @@ describe("reactive resource paging", () => {
         ),
       ).toBe(true);
     });
+    const pendingNext = within(group).getByRole("button", { name: "Next" });
+    expect(pendingNext).toBeDisabled();
+    expect(pendingNext).toHaveAttribute("aria-busy", "true");
+    expect(pendingNext.querySelector(".button-spinner")).toBeInTheDocument();
+    expect(within(group).getByText("Server Page 1")).toBeInTheDocument();
+    expect(within(group).getByText("Page 1")).toBeInTheDocument();
+    expect(group.querySelector(".group-card__page-stats"))
+      .toHaveTextContent("1–13.2mshit");
+    expect(group.querySelector(".group-card__page-stats .inline-loading"))
+      .not.toBeInTheDocument();
+    expect(group.querySelector(".group-card__page-stats"))
+      .not.toHaveTextContent("21–21");
     expect(group.querySelector(".group-card__count-stats")).toBe(countStats);
-    expect(countStats).toHaveTextContent("48(60.9msmiss)");
+    expect(countStats).toHaveTextContent("4814,379.3msmiss");
     releaseSecondPage();
     await screen.findByText("Server Page 2");
     expect(group.querySelector(".group-card__count-stats")).toBe(countStats);
     expect(group.querySelector(".group-card__page-stats"))
-      .toHaveTextContent("21–21(4.7mshit)");
+      .toHaveTextContent("21–214.7mshit");
     const countRequestsAfterEviction = requestBodies.filter(({ path }) =>
       path.endsWith("count-resources"),
     ).length;
@@ -152,7 +176,7 @@ describe("reactive resource paging", () => {
     expect(within(group).queryByText("48")).not.toBeInTheDocument();
   });
 
-  it("bounds totals at 50,000 and doubles only the clicked count until exact", async () => {
+  it("caps automatic totals at the measured safe 30,000-result boundary", async () => {
     const countBodies: Array<Record<string, unknown>> = [];
     let pageRequests = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -172,11 +196,7 @@ describe("reactive resource paging", () => {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         countBodies.push(body);
         const limit = Number(body.countLimit);
-        return jsonResponse(success(
-          limit < 200_000
-            ? { count: limit, limit, truncated: true }
-            : { count: 175_000, limit, truncated: false },
-        ));
+        return jsonResponse(success({ count: limit, limit, truncated: true }));
       }
       throw new Error(`Unexpected request: ${path}`);
     });
@@ -192,50 +212,259 @@ describe("reactive resource paging", () => {
     const group = groupButton.closest(".group-card") as HTMLElement;
     fireEvent.click(groupButton);
 
-    const truncatedCount = await within(group).findByRole("button", {
-      name: /Count beyond 50,000 server resources/,
-    });
-    expect(truncatedCount).toHaveTextContent("50k+");
+    const truncatedCount = await within(group).findByText("30,000+");
+    expect(truncatedCount).toHaveAttribute(
+      "aria-label",
+      "Count beyond 30,000 server resources",
+    );
     expect(countBodies).toEqual([
-      expect.objectContaining({ countLimit: 50_000, cache: true }),
+      expect.objectContaining({ countLimit: 30_000, cache: true }),
     ]);
-    const pagesBeforeDoubling = pageRequests;
-
-    fireEvent.click(truncatedCount);
-    const doubledCount = await within(group).findByRole("button", {
-      name: /Count beyond 100,000 server resources/,
-    });
-    expect(doubledCount).toHaveTextContent("100k+");
-    expect(countBodies).toEqual([
-      expect.objectContaining({ countLimit: 50_000, cache: true }),
-      expect.objectContaining({ countLimit: 100_000, cache: true }),
-    ]);
-    expect(pageRequests).toBe(pagesBeforeDoubling);
-
-    fireEvent.click(doubledCount);
-    expect(await within(group).findByText("175,000")).toBeInTheDocument();
-    expect(countBodies).toEqual([
-      expect.objectContaining({ countLimit: 50_000, cache: true }),
-      expect.objectContaining({ countLimit: 100_000, cache: true }),
-      expect.objectContaining({ countLimit: 200_000, cache: true }),
-    ]);
-    expect(pageRequests).toBe(pagesBeforeDoubling);
     expect(within(group).queryByRole("button", {
       name: /Count beyond/,
     })).not.toBeInTheDocument();
+    expect(pageRequests).toBe(1);
 
     const cacheSwitch = screen.getByRole("switch", { name: /Cache Enabled/ });
     fireEvent.click(cacheSwitch);
     await waitFor(() => {
-      expect(countBodies.at(-1)).toMatchObject({ countLimit: 50_000, cache: false });
+      expect(countBodies.at(-1)).toMatchObject({ countLimit: 30_000, cache: false });
     });
-    expect(await within(group).findByRole("button", {
-      name: /Count beyond 50,000 server resources/,
-    })).toBeInTheDocument();
+    expect(await within(group).findByText("30,000+")).toBeInTheDocument();
 
     fireEvent.click(cacheSwitch);
     await waitFor(() => {
-      expect(countBodies.at(-1)).toMatchObject({ countLimit: 50_000, cache: true });
+      expect(countBodies.at(-1)).toMatchObject({ countLimit: 30_000, cache: true });
     });
+  });
+
+  it("never presents the previous subject's page or count as current", async () => {
+    let releaseSuperPage: () => void = () => undefined;
+    let releaseSuperCount: () => void = () => undefined;
+    const superPageGate = new Promise<void>((resolve) => {
+      releaseSuperPage = resolve;
+    });
+    const superCountGate = new Promise<void>((resolve) => {
+      releaseSuperCount = resolve;
+    });
+    setFetchImplementation(
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path === "/api/bootstrap") return jsonResponse(success(bootstrap));
+        if (path.startsWith("/api/subjects?")) {
+          return jsonResponse(success({
+            data: [{ type: "user", id: "user-1" }],
+            pageInfo: { hasNextPage: false, hasPreviousPage: false, total: 1 },
+          }));
+        }
+        if (path === "/api/eacl/lookup-resources") {
+          const body = JSON.parse(String(init?.body)) as {
+            subject: { id: string };
+          };
+          if (body.subject.id === "super-user") await superPageGate;
+          return jsonResponse(success({
+            items: [{
+              type: "server",
+              id: body.subject.id === "super-user" ? "server-super" : "server-user-1",
+            }],
+            pageInfo: { hasNextPage: false, hasPreviousPage: false },
+          }));
+        }
+        if (path === "/api/eacl/count-resources") {
+          const body = JSON.parse(String(init?.body)) as {
+            subject: { id: string };
+          };
+          if (body.subject.id === "super-user") await superCountGate;
+          return jsonResponse(success({
+            count: body.subject.id === "super-user" ? 1_000 : 48,
+            limit: 30_000,
+            truncated: false,
+          }));
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }) as typeof fetch,
+    );
+    render(() => (
+      <AppStateProvider>
+        <SubjectsPanel />
+        <ResourceTreePanel />
+      </AppStateProvider>
+    ));
+
+    const groupButton = await screen.findByRole("button", { name: /Servers/ });
+    const group = groupButton.closest(".group-card") as HTMLElement;
+    fireEvent.click(groupButton);
+    await within(group).findByText("server-user-1");
+    await within(group).findByText("48");
+
+    fireEvent.click(screen.getByRole("button", { name: "Super user" }));
+    await waitFor(() => {
+      expect(within(group).queryByText("server-user-1")).not.toBeInTheDocument();
+      expect(within(group).queryByText("48")).not.toBeInTheDocument();
+    });
+    expect(group.querySelector(".group-card__page-stats .inline-loading"))
+      .toBeInTheDocument();
+
+    releaseSuperPage();
+    await within(group).findByText("server-super");
+    expect(within(group).queryByText("48")).not.toBeInTheDocument();
+    expect(group.querySelector(".group-card__count-stats .inline-loading"))
+      .toBeInTheDocument();
+
+    releaseSuperCount();
+    expect(await within(group).findByText("1,000")).toBeInTheDocument();
+  });
+
+  it("requeries a collapsed count and publishes the repeated cache hit", async () => {
+    let countRequests = 0;
+    setFetchImplementation(
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === "/api/bootstrap") return jsonResponse(success(bootstrap));
+        if (path === "/api/eacl/lookup-resources") {
+          return jsonResponse(success({
+            items: [{ type: "server", id: "server-page-1" }],
+            pageInfo: { hasNextPage: false, hasPreviousPage: false },
+          }));
+        }
+        if (path === "/api/eacl/count-resources") {
+          countRequests += 1;
+          return jsonResponse({
+            ...success({ count: 48, limit: 30_000, truncated: false }),
+            meta: {
+              revision: "h100.c0",
+              requestId: `count-${countRequests}`,
+              elapsedMs: countRequests === 1 ? 300 : 1.2,
+              cacheStatus: countRequests === 1 ? "miss" : "hit",
+            },
+          });
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }) as typeof fetch,
+    );
+    render(() => (
+      <AppStateProvider>
+        <ResourceTreePanel />
+      </AppStateProvider>
+    ));
+
+    const groupButton = await screen.findByRole("button", { name: /Servers/ });
+    const group = groupButton.closest(".group-card") as HTMLElement;
+    fireEvent.click(groupButton);
+    await waitFor(() => {
+      expect(group.querySelector(".group-card__count-stats"))
+        .toHaveTextContent("48300.0msmiss");
+    });
+
+    fireEvent.click(groupButton);
+    fireEvent.click(groupButton);
+    await waitFor(() => expect(countRequests).toBe(2));
+    await waitFor(() => {
+      expect(group.querySelector(".group-card__count-stats"))
+        .toHaveTextContent("481.2mshit");
+    });
+  });
+
+  it("retains the last successful page with a retryable error before publishing recovered data", async () => {
+    let secondPageAttempts = 0;
+    setFetchImplementation(
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path === "/api/bootstrap") return jsonResponse(success(bootstrap));
+        if (path === "/api/eacl/count-resources") {
+          return jsonResponse(success({ count: 48, limit: 50_000, truncated: false }));
+        }
+        if (path === "/api/eacl/lookup-resources") {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          if (body.after && ++secondPageAttempts === 1) {
+            return failure("backend-timeout", "Authorization traversal timed out", 504);
+          }
+          return jsonResponse(success({
+            items: [{
+              type: "server",
+              id: body.after ? "server-page-2" : "server-page-1",
+            }],
+            pageInfo: {
+              endCursor: "next-cursor",
+              hasNextPage: !body.after,
+              hasPreviousPage: Boolean(body.after),
+            },
+          }));
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }) as typeof fetch,
+    );
+    render(() => (
+      <AppStateProvider>
+        <ResourceTreePanel />
+      </AppStateProvider>
+    ));
+
+    const groupButton = await screen.findByRole("button", { name: /Servers/ });
+    const group = groupButton.closest(".group-card") as HTMLElement;
+    fireEvent.click(groupButton);
+    await within(group).findByText("Server Page 1");
+    fireEvent.click(within(group).getByRole("button", { name: "Next" }));
+
+    expect(await within(group).findByText("Authorization traversal timed out"))
+      .toBeInTheDocument();
+    expect(within(group).getByText("Server Page 1")).toBeInTheDocument();
+    expect(within(group).getByText("Page 1")).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "Next" })).toBeEnabled();
+    expect(within(group).getByText("Page 2 failed")).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "Previous page" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole("button", { name: "Retry" }));
+    expect(await within(group).findByText("Server Page 2")).toBeInTheDocument();
+    expect(secondPageAttempts).toBe(2);
+  });
+
+  it("surfaces an expired cursor before offering an explicit first-page recovery", async () => {
+    setFetchImplementation(
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path === "/api/bootstrap") return jsonResponse(success(bootstrap));
+        if (path === "/api/eacl/count-resources") {
+          return jsonResponse(success({ count: 48, limit: 50_000, truncated: false }));
+        }
+        if (path === "/api/eacl/lookup-resources") {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          if (body.after) {
+            return failure("invalid-cursor", "The database basis changed", 409);
+          }
+          return jsonResponse(success({
+            items: [{ type: "server", id: "server-page-1" }],
+            pageInfo: {
+              endCursor: "old-cursor",
+              hasNextPage: true,
+              hasPreviousPage: false,
+            },
+          }));
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }) as typeof fetch,
+    );
+    render(() => (
+      <AppStateProvider>
+        <ResourceTreePanel />
+      </AppStateProvider>
+    ));
+
+    const groupButton = await screen.findByRole("button", { name: /Servers/ });
+    const group = groupButton.closest(".group-card") as HTMLElement;
+    fireEvent.click(groupButton);
+    await within(group).findByText("Server Page 1");
+    fireEvent.click(within(group).getByRole("button", { name: "Next" }));
+
+    expect(await within(group).findByText("The database basis changed"))
+      .toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "First page" }))
+      .toBeInTheDocument();
+    expect(within(group).getByText("Server Page 1")).toBeInTheDocument();
+    expect(within(group).getByText("Page 1")).toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole("button", { name: "First page" }));
+    expect(await within(group).findByText("Server Page 1")).toBeInTheDocument();
   });
 });

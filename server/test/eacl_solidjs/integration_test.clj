@@ -59,7 +59,7 @@
       (is (not (re-find #"displayName" (:body subjects))))
       (is (= 200 (:status relationships)))
       (is (= 10 (count (:items (support/data relationships)))))
-      (is (= "disabled"
+      (is (= "miss"
              (get-in (support/meta-data relationships) [:cacheStatus])))
       (is (not (re-find #"displayName" (:body relationships))))
       (is (= true (get-in (support/data check) [:allowed])))
@@ -67,7 +67,7 @@
       (is (= [{:type "platform" :id "platform"}]
              (:items (support/data platforms)))))))
 
-(deftest nested-permission-filter-bypasses-complete-answer-cache
+(deftest nested-permission-filter-keeps-inner-point-checks-uncached
   (support/with-test-system [system]
     (let [queries (atom [])
           handler (:handler system)
@@ -88,7 +88,7 @@
       (is (= 200 (:status response)))
       (is (= 10 (count @queries)))
       (is (every? #(false? (:cache? %)) @queries))
-      (is (= "disabled"
+      (is (= "miss"
              (get-in (support/meta-data response) [:cacheStatus]))))))
 
 (deftest asynchronous-seed-keeps-eacl-queries-available

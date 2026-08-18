@@ -126,6 +126,11 @@ export interface Bootstrap {
   quickSubjects: Array<{ id: string; label: string }>;
   pageSizeOptions: PageSize[];
   defaultPageSize: PageSize;
+  capabilities: {
+    schemaWrite: boolean;
+    seedWrite: boolean;
+    cacheEvict: boolean;
+  };
 }
 
 export interface CacheSnapshot {

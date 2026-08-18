@@ -7,8 +7,9 @@
             [eacl-solidjs.api :as api]
             [eacl-solidjs.config :as config]
             [eacl-solidjs.data :as data]
+            [eacl-solidjs.http :as http]
             [ring.adapter.jetty :as jetty])
-  (:import [java.util.concurrent Executors ExecutorService TimeUnit]))
+  (:import [java.util.concurrent Executors ExecutorService Semaphore TimeUnit]))
 
 (defonce !system (atom nil))
 
@@ -18,16 +19,25 @@
     @(d/transact conn schema/v7-schema)))
 
 (defn- client-options
-  [{:keys [security-key]}]
+  [{:keys [security-key request-timeout-ms cache-max-entries
+           cache-projection-max-weight cache-denotation-max-weight
+           cache-answer-max-weight cache-managed-proof-max-atoms]}]
   ;; :coherence-authority was a pre-release experimental option; cache
   ;; coherence is managed by the release client.
   ;; The demo's million-server platform subject legitimately exceeds the
   ;; default per-request work ceilings, so this deployment opts into
   ;; larger ones explicitly.
-  (cond-> {:cache {:remember-answers true}
+  (cond-> {:cache {:remember-answers true
+                   :max-entries cache-max-entries
+                   :subproblem-cache
+                   {:projection-max-weight cache-projection-max-weight
+                    :denotation-max-weight cache-denotation-max-weight
+                    :answer-max-weight cache-answer-max-weight
+                    :managed-proof-max-atoms cache-managed-proof-max-atoms}}
            :recursive-traversal-limits {:max-derived-grants 5000000
                                         :max-advanced-datoms 5000000
-                                        :max-queued-work 1000000}}
+                                        :max-queued-work 1000000}
+           :execution-timeout-ms request-timeout-ms}
     security-key (assoc :security-key security-key)))
 
 (defn build-system
@@ -45,6 +55,8 @@
                     :conn conn
                     :acl acl
                     :executor executor
+                    :eacl-permits
+                    (Semaphore. (:max-eacl-concurrency runtime-config) true)
                     :!cache-generation (atom 0)
                     :!metrics (atom {})
                     :!seed-running? (atom false)
@@ -72,17 +84,28 @@
       (catch IllegalStateException exception
         (log/debug exception "Datomic connection was already released")))))
 
+(defn jetty-options
+  [{:keys [host port request-timeout-ms jetty-min-threads
+           jetty-max-threads jetty-max-queued-requests]}]
+  {:host host
+   :port port
+   :join? false
+   :async? true
+   :async-timeout request-timeout-ms
+   :max-idle-time request-timeout-ms
+   :configurator http/configure-server!
+   :min-threads jetty-min-threads
+   :max-threads jetty-max-threads
+   :max-queued-requests jetty-max-queued-requests})
+
 (defn- listen!
   [base]
-  (let [{:keys [host port request-timeout-ms]} (:config base)]
+  (let [{:keys [host port]} (:config base)]
     (try
       (let [server
             (jetty/run-jetty
-             (:handler base)
-             {:host host
-              :port port
-              :join? false
-              :idle-timeout request-timeout-ms})
+             (http/asynchronous-handler (:handler base))
+             (jetty-options (:config base)))
             running (assoc base :http-server server)]
         (reset! !system running)
         (log/info "EACL SolidJS server ready" {:host host :port port})

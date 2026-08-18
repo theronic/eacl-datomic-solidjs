@@ -1,41 +1,59 @@
 (ns benchmark
-  "Opt-in 10k-server HTTP-boundary benchmark; never part of the regular suite."
+  "Opt-in 10k-server Ring-boundary benchmark; never part of the regular suite."
   (:refer-clojure :exclude [run!])
   (:require [clojure.data.json :as json]
+            [eacl-solidjs.benchmark-stats :as stats]
             [eacl-solidjs.data :as data]
             [eacl-solidjs.test-support :as support])
   (:import [java.nio.charset StandardCharsets]))
 
-(defn- percentile
-  [sorted-values percentile]
-  (let [index (-> (* percentile (dec (count sorted-values)))
-                  Math/ceil
-                  long)]
-    (nth sorted-values index)))
+(def operation-descriptors
+  [{:key :check-permission
+    :path "/api/eacl/check-permission"
+    :body support/check-permission-body}
+   {:key :lookup-resources
+    :path "/api/eacl/lookup-resources"
+    :body support/lookup-resources-body}
+   {:key :lookup-subjects
+    :path "/api/eacl/lookup-subjects"
+    :body support/lookup-subjects-body}])
 
-(defn- timed-request
-  [handler]
+(defn timed-request
+  "Measure one in-process Ring handler invocation for an operation descriptor.
+  The response's `meta.elapsedMs` remains separate from this outer boundary."
+  [handler {:keys [key path body]}]
   (let [started (System/nanoTime)
-        response (support/request
-                  handler :post "/api/eacl/lookup-resources"
-                  support/lookup-resources-body)
-        elapsed-ms (/ (double (- (System/nanoTime) started)) 1000000.0)
+        response (support/request handler :post path body)
+        boundary-elapsed-ms (/ (double (- (System/nanoTime) started))
+                               1000000.0)
         payload-bytes (alength
                        (.getBytes ^String (:body response)
                                   StandardCharsets/UTF_8))]
     (when-not (= 200 (:status response))
       (throw (ex-info "Benchmark request failed."
-                      {:status (:status response)
+                      {:operation key
+                       :status (:status response)
                        :body (:body response)})))
-    {:elapsed-ms elapsed-ms :payload-bytes payload-bytes}))
+    (let [envelope (support/response-body response)
+          server-elapsed-ms (get-in envelope [:meta :elapsedMs])
+          cache-status (get-in envelope [:meta :cacheStatus])]
+      (when-not (and (number? server-elapsed-ms)
+                     (#{"hit" "miss" "disabled"} cache-status))
+        (throw (ex-info "Benchmark response omitted timing metadata."
+                        {:operation key
+                         :meta (:meta envelope)})))
+      {:server-elapsed-ms server-elapsed-ms
+       :boundary-elapsed-ms boundary-elapsed-ms
+       :payload-bytes payload-bytes
+       :cache-status cache-status})))
 
 (defn run!
-  "Seed `server-count` additional servers and measure warmed default-page HTTP
-  requests. Returns JSON-safe results including request count, bytes, p50/p95,
-  and the proposal's 250 ms target. Defaults to 10,000 servers and 50 samples."
-  ([] (run! {:server-count 10000 :iterations 50}))
-  ([{:keys [server-count iterations]
-     :or {server-count 10000 iterations 50}}]
+  "Seed `server-count` additional servers, then warm and sample the point check
+  and both lookup operations independently. Defaults to 10,000 servers, three
+  warmups per operation, and 50 recorded samples per operation."
+  ([] (run! {:server-count 10000 :iterations 50 :warmup-requests 3}))
+  ([{:keys [server-count iterations warmup-requests]
+     :or {server-count 10000 iterations 50 warmup-requests 3}}]
    (support/with-test-system [system]
      (let [seed-started (System/nanoTime)
            _ (data/seed-more! (:conn system)
@@ -46,22 +64,21 @@
                               server-count)
            seed-ms (/ (double (- (System/nanoTime) seed-started)) 1000000.0)
            handler (:handler system)
-           _ (dotimes [_ 3] (timed-request handler))
-           samples (vec (repeatedly iterations #(timed-request handler)))
-           latencies (vec (sort (map :elapsed-ms samples)))
-           bytes (reduce + (map :payload-bytes samples))
-           p95 (percentile latencies 0.95)]
-       {:fixture {:servers-added server-count
-                  :servers-total (+ 48 server-count)
-                  :seed-ms seed-ms}
-        :requests iterations
-        :payload-bytes {:total bytes
-                        :average (/ bytes (double iterations))}
-        :latency-ms {:p50 (percentile latencies 0.50)
-                     :p95 p95
-                     :max (peek latencies)}
-        :target {:warmed-default-page-p95-ms 250.0
-                 :met? (<= p95 250.0)}}))))
+           operation-samples
+           (into {}
+                 (map (fn [descriptor]
+                        (dotimes [_ warmup-requests]
+                          (timed-request handler descriptor))
+                        [(:key descriptor)
+                         (vec (repeatedly iterations
+                                          #(timed-request handler descriptor)))])
+                      operation-descriptors))]
+       (stats/build-result
+        {:servers-added server-count
+         :servers-total (+ 48 server-count)
+         :seed-ms seed-ms}
+        operation-samples
+        warmup-requests)))))
 
 (defn run-json!
   []

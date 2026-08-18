@@ -1,4 +1,10 @@
-import type { ApiSuccess, Bootstrap, CacheSnapshot, SchemaInfo } from "../src/types";
+import type {
+  ApiSuccess,
+  Bootstrap,
+  CacheSnapshot,
+  CacheStatus,
+  SchemaInfo,
+} from "../src/types";
 
 export const schemaSource = `definition user {}
 
@@ -51,6 +57,11 @@ export const bootstrap: Bootstrap = {
   ],
   pageSizeOptions: [10, 20, 50, 100, 250, 500, 1000],
   defaultPageSize: 20,
+  capabilities: {
+    schemaWrite: true,
+    seedWrite: true,
+    cacheEvict: true,
+  },
 };
 
 export const cacheSnapshot: CacheSnapshot = {
@@ -59,8 +70,20 @@ export const cacheSnapshot: CacheSnapshot = {
   capturedAt: "2026-08-08T10:00:00Z",
 };
 
-export function success<T>(data: T, revision = "d100.c0"): ApiSuccess<T> {
+export function success<T>(data: T, revision = "h100.c0"): ApiSuccess<T> {
   return { data, meta: { revision, requestId: "test-request" } };
+}
+
+export function timedSuccess<T>(
+  data: T,
+  elapsedMs: number,
+  cacheStatus: CacheStatus,
+  revision = "h100.c0",
+): ApiSuccess<T> {
+  return {
+    data,
+    meta: { revision, requestId: "timed-test-request", elapsedMs, cacheStatus },
+  };
 }
 
 export function jsonResponse(payload: unknown, status = 200): Response {

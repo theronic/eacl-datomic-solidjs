@@ -5,7 +5,8 @@
             [datomic.api :as d]
             [eacl-solidjs.data :as data]
             [eacl-solidjs.runtime :as runtime])
-  (:import [java.nio.charset StandardCharsets]
+  (:import [java.io InputStream]
+           [java.nio.charset StandardCharsets]
            [java.time Instant]
            [java.util UUID]))
 
@@ -48,9 +49,24 @@
     (sequential? value) (mapv json-safe value)
     :else value))
 
-(defn- body-bytes
-  [body]
-  (alength (.getBytes ^String body StandardCharsets/UTF_8)))
+(defn- bounded-body
+  [request max-body-bytes]
+  (let [body (:body request)
+        bytes (cond
+                (instance? InputStream body)
+                (.readNBytes ^InputStream body (inc max-body-bytes))
+
+                (string? body)
+                (.getBytes ^String body StandardCharsets/UTF_8)
+
+                (bytes? body)
+                body
+
+                :else
+                (byte-array 0))]
+    (when (> (alength ^bytes bytes) max-body-bytes)
+      (api-error 413 "request-too-large" "Request body is too large."))
+    (String. ^bytes bytes StandardCharsets/UTF_8)))
 
 (defn response
   [request status payload]
@@ -78,23 +94,27 @@
 
 (defn request-id
   [request]
-  (or (get-in request [:headers "x-request-id"])
+  (or (:request-id request)
+      (get-in request [:headers "x-request-id"])
       (str (UUID/randomUUID))))
 
 (defn read-json
   [request max-body-bytes]
   (let [content-type (get-in request [:headers "content-type"] "")
-        content-length (some-> (get-in request [:headers "content-length"])
-                               Long/parseLong)]
+        content-length
+        (when-let [raw (get-in request [:headers "content-length"])]
+          (try
+            (Long/parseLong raw)
+            (catch NumberFormatException _
+              (api-error 400 "invalid-content-length"
+                         "Content-Length must be a whole number."))))]
     (when-not (str/starts-with? (str/lower-case content-type)
                                 "application/json")
       (api-error 415 "unsupported-media-type"
                  "Content-Type must be application/json."))
     (when (and content-length (> content-length max-body-bytes))
       (api-error 413 "request-too-large" "Request body is too large."))
-    (let [body (slurp (:body request))]
-      (when (> (body-bytes body) max-body-bytes)
-        (api-error 413 "request-too-large" "Request body is too large."))
+    (let [body (bounded-body request max-body-bytes)]
       (try
         (let [parsed (json/read-str body :key-fn keyword)]
           (when-not (map? parsed)
@@ -144,14 +164,15 @@
      value)))
 
 (defn count-limit
-  [body]
+  [system body]
   (let [value (:countLimit body)]
     (when-not (and (integer? value)
                    (pos? value)
-                   (<= value Long/MAX_VALUE))
+                   (<= value (get-in system [:config :max-count-limit])))
       (api-error 400 "invalid-count-limit"
-                 "countLimit must be a positive whole number."
-                 {:field "countLimit"}))
+                 "countLimit must be a positive supported whole number."
+                 {:field "countLimit"
+                  :maximum (get-in system [:config :max-count-limit])}))
     (long value)))
 
 (defn query-long
@@ -241,13 +262,33 @@
         (or (= "invalid-cursor" (:error/code data))
             (str/includes? (str (or (:type data) "")) "cursor")
             (str/includes? (str/lower-case message) "cursor"))
-        status (or (:http/status data) (when cursor-error? 409) 500)
+        deadline? (= :eacl.execution/deadline-exceeded (:type data))
+        cancelled? (= :eacl.execution/cancelled (:type data))
+        traversal-limit?
+        (= :eacl.recursive-traversal/limit-exceeded (:eacl/error data))
+        status (or (:http/status data)
+                   (when deadline? 504)
+                   (when cancelled? 499)
+                   (when traversal-limit? 422)
+                   (when cursor-error? 409)
+                   500)
         code (or (:error/code data)
+                 (when deadline? "execution-timeout")
+                 (when cancelled? "request-cancelled")
+                 (when traversal-limit? "traversal-limit-exceeded")
                  (when cursor-error? "invalid-cursor")
                  "internal-error")
-        safe-message (if (= 500 status)
+        safe-message (cond
+                       cancelled? "The client cancelled the request."
+                       traversal-limit?
+                       (str "The request exceeded the authorization traversal "
+                            "safety limit. Reduce the requested count and retry.")
+                       (and cursor-error? (= 409 status))
+                       (str "This page cursor is no longer valid for the current "
+                            "query or deployment. Start again from the first page.")
+                       (>= status 500)
                        "The server could not complete the request."
-                       message)]
+                       :else message)]
     (response request status
               {:error (cond-> {:code code :message safe-message}
                         (:error/details data)
