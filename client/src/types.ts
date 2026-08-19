@@ -118,6 +118,39 @@ export interface SeedProgress {
   error?: string | null;
 }
 
+export interface BuildSource {
+  repository: string;
+  commit: string | null;
+  ref: string | null;
+  dirty: boolean | null;
+  committedAt: string | null;
+}
+
+export interface ArtifactProvenance {
+  lib: string;
+  version: string | null;
+  /** Timestamped Clojars snapshot, or null when the jar is unpublished. */
+  resolvedVersion: string | null;
+  /** Full commit stamped into the jar's POM by the EACL release workflow. */
+  commit: string | null;
+  jarSha256: string;
+}
+
+export interface BuildEacl {
+  repository: string;
+  requestedVersion?: string;
+  adapter: ArtifactProvenance | null;
+  core: ArtifactProvenance | null;
+}
+
+export interface BuildInfo {
+  application: string;
+  development: boolean;
+  builtAt: string | null;
+  source: BuildSource;
+  eacl: BuildEacl;
+}
+
 export interface Bootstrap {
   status: "ready" | "seeding";
   seed: SeedProgress;
@@ -131,6 +164,7 @@ export interface Bootstrap {
     seedWrite: boolean;
     cacheEvict: boolean;
   };
+  build?: BuildInfo;
 }
 
 export interface CacheSnapshot {

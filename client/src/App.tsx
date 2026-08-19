@@ -1,4 +1,5 @@
 import { Show, type JSX } from "solid-js";
+import { BuildStamp } from "./components/BuildStamp";
 import { CachePanel } from "./components/CachePanel";
 import { DetailPanel } from "./components/DetailPanel";
 import { EmptyState, ErrorBlock, InlineLoading, LoadingBlock } from "./components/Common";
@@ -107,6 +108,7 @@ export function App(): JSX.Element {
           EACL authorization runs on Datahike; SolidJS receives only bounded HTTP
           results.
         </p>
+        <BuildStamp />
         <Show when={!app.permission()}>
           <EmptyState>No permission is available in the active schema.</EmptyState>
         </Show>

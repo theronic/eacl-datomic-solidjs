@@ -6,9 +6,11 @@ only receives bounded JSON pages and counts.
 
 The application resolves the Maven adapter coordinate
 `dev.eacl/eacl-datahike` version `8.0.0-SNAPSHOT`; it has no source-checkout or
-legacy database dependency. The deployed build uses the exact locally installed
-PR 115 snapshot because the current Clojars timestamp predates cooperative
-cancellation. Its source commit and checksums are recorded in
+legacy database dependency. Because that snapshot moves quickly, every build
+records which one it embeds: `server/build.clj` derives the timestamped
+Clojars version, the EACL commit, and the jar checksums from the resolved
+dependencies together with the demo's own Git commit, and the explorer footer
+and `/api/health` report that record. See
 [`docs/dependencies.md`](docs/dependencies.md).
 
 ## Local quickstart

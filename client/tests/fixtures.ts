@@ -1,4 +1,10 @@
-import type { ApiSuccess, Bootstrap, CacheSnapshot, SchemaInfo } from "../src/types";
+import type {
+  ApiSuccess,
+  Bootstrap,
+  BuildInfo,
+  CacheSnapshot,
+  SchemaInfo,
+} from "../src/types";
 
 export const schemaSource = `definition user {}
 
@@ -34,6 +40,37 @@ export const schema: SchemaInfo = {
   ],
 };
 
+export const build: BuildInfo = {
+  application: "eacl-datahike-demo",
+  development: false,
+  builtAt: "2026-08-18T22:01:47.120Z",
+  source: {
+    repository: "https://github.com/theronic/eacl-datomic-solidjs",
+    commit: "06d8141a0cfebbd3b423cd719f9f05eb94ca50aa",
+    ref: "agent/port-to-datahike-demo",
+    dirty: false,
+    committedAt: "2026-08-14T22:50:39+02:00",
+  },
+  eacl: {
+    repository: "https://github.com/theronic/eacl",
+    requestedVersion: "8.0.0-SNAPSHOT",
+    adapter: {
+      lib: "dev.eacl/eacl-datahike",
+      version: "8.0.0-SNAPSHOT",
+      resolvedVersion: "8.0.0-20260818.233134-7",
+      commit: "f4be377a139f9bc9dfcb9c40f91418bdbf3a4b3d",
+      jarSha256: "fce16a8a5693c3d6b5417d3d44be804bd1c28e6e4f068f220e6fa791a3210856",
+    },
+    core: {
+      lib: "dev.eacl/eacl",
+      version: "8.0.0-SNAPSHOT",
+      resolvedVersion: "8.0.0-20260818.233119-7",
+      commit: "f4be377a139f9bc9dfcb9c40f91418bdbf3a4b3d",
+      jarSha256: "5cfdcbd21e59d646b06e21c3f4f3c69198e4eadd7ca5dc875dc337183d8b1934",
+    },
+  },
+};
+
 export const bootstrap: Bootstrap = {
   status: "ready",
   seed: {
@@ -56,6 +93,7 @@ export const bootstrap: Bootstrap = {
     seedWrite: true,
     cacheEvict: true,
   },
+  build,
 };
 
 export const cacheSnapshot: CacheSnapshot = {

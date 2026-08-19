@@ -122,7 +122,8 @@
    system request
    {:status :ready
     :datahike {:revision (runtime/datahike-revision (d/db (:conn system)))
-               :store-backend (get-in system [:config :store-backend])}}))
+               :store-backend (get-in system [:config :store-backend])}
+    :build (:build-info system)}))
 
 (defn- handle-bootstrap
   [system request]
@@ -142,7 +143,8 @@
           :capabilities
           {:schema-write? (nil? (get-in system [:config :admin-token]))
            :seed-write? (nil? (get-in system [:config :admin-token]))
-           :cache-evict? (nil? (get-in system [:config :admin-token]))}})))))
+           :cache-evict? (nil? (get-in system [:config :admin-token]))}
+          :build (:build-info system)})))))
 
 (defn- handle-subjects
   [system request]

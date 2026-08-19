@@ -27,6 +27,11 @@ sudo systemctl restart eacl-datahike-demo
 for attempt in $(seq 1 300); do
   if curl --connect-timeout 1 --max-time 2 --fail --silent \
     http://127.0.0.1:8088/api/health >/dev/null; then
+    # The health payload carries the embedded build record (demo commit,
+    # resolved EACL snapshot and commit), so the deploy log states what is live.
+    curl --connect-timeout 1 --max-time 5 --fail --silent \
+      http://127.0.0.1:8088/api/health
+    echo
     exit 0
   fi
   if [ "$attempt" -eq 300 ]; then

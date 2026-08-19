@@ -123,6 +123,17 @@ infra/scripts/verify-small-fixture.sh "$EACL_INSTANCE_HOST" \
   "$EACL_SSH_PRIVATE_KEY"
 ```
 
+`deploy-artifact.sh` prints `/api/health` once the service answers. Its `build`
+object is the record embedded at `npm run build` time: the demo commit
+(`source.commit`, with `source.dirty` when the tree had uncommitted changes)
+and the EACL adapter and core jars it bundles (`eacl.adapter.resolvedVersion`
+is the timestamped Clojars snapshot, `eacl.adapter.commit` the EACL commit that
+published it; both are `null` for a locally installed, unpublished EACL jar).
+The explorer footer shows the same record with links to the commits and the
+Clojars version page, so a browser tab answers "what is deployed?" without
+SSH. Confirm it names the commit and snapshot you intended before accepting
+the deployment.
+
 Before a large seed, restart the application and reboot EC2. Health, totals,
 pagination, permission checks, and the 48-resource fixture must survive both.
 Confirm `ss` shows 8088 and 7888 only on loopback. Test nREPL only through SSH:

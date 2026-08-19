@@ -5,6 +5,7 @@
             [eacl.core :as eacl]
             [eacl.datahike.core :as datahike-eacl]
             [eacl-datahike-demo.api :as api]
+            [eacl-datahike-demo.build-info :as build-info]
             [eacl-datahike-demo.config :as config]
             [eacl-datahike-demo.data :as data]
             [eacl-datahike-demo.eacl-adapter :as eacl-adapter]
@@ -100,6 +101,7 @@
             system (merge
                     connection
                     {:config runtime-config
+                     :build-info (build-info/read-build-info)
                      :acl acl
                      :executor executor
                      :eacl-permits
